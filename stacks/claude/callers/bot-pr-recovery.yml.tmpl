@@ -1,0 +1,23 @@
+name: Bot PR Recovery
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'Specific PR number to kick (optional)'
+        required: false
+        type: string
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  recover:
+    uses: MervinPraison/github-automation-template/.github/workflows/bot-pr-recovery-callable.yml@{{HUB_REF}}
+    secrets: inherit
+    with:
+      hub_ref: {{HUB_REF}}
+      pr_number: ${{ github.event.inputs.pr_number || '' }}

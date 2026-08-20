@@ -1,0 +1,32 @@
+/**
+ * Tools profile gate configuration.
+ */
+module.exports = {
+  repoFullName: '{{OWNER}}/{{REPO}}',
+  gitUser: '{{GIT_USER}}',
+  gitEmail: '{{GIT_EMAIL}}',
+  triggerLogins: ['{{GIT_USER}}', 'github-actions[bot]'],
+  productPathPrefixes: ['{{SDK_PATH_PREFIX_1}}', 'tests/'],
+  sensitivePathPatterns: [/^\.github\/workflows\//],
+  requiredCheckPatterns: [/^ci$/i, /python/i, /test/i, /lint/i, /ruff/i],
+  optionalCancelledChecks: ['detect-and-trigger'],
+  optionalCancelledWhenCoreGreen: [],
+  ciWorkflowFile: '{{CI_WORKFLOW_FILE}}',
+  ciWorkflowName: '{{CI_WORKFLOW_NAME}}',
+  claudeWorkflowName: '{{CLAUDE_WORKFLOW_NAME}}',
+  mergeGateWorkflowRuns: ['{{CI_WORKFLOW_NAME}}', '{{CLAUDE_WORKFLOW_NAME}}'],
+  ciFailureWorkflowRuns: ['{{CI_WORKFLOW_NAME}}'],
+  testCommand: "{{TEST_COMMAND}}",
+  docsUrl: '{{DOCS_URL}}',
+  architectureDoc: 'AGENTS.md',
+  pypiPackageName: '{{PYPI_PACKAGE_NAME}}',
+  finalClaudeScope:
+    'SCOPE: Focus ONLY on {{REPO}} (agent-callable tools). Not core SDK or plugins.',
+  finalClaudeProductValue:
+    '4. Product value: tools must be agent-invokable via parameters; lazy imports only.',
+  mergeGateProductValue: 'Confirm tool adds agent value without scope creep.',
+  mergeGateLayering: 'BLOCK if core agent logic was added here instead of praisonaiagents.',
+  agentPyChecks: false,
+  reviewBotLogins: ['coderabbitai[bot]', 'qodo-code-review[bot]', 'greptile-apps[bot]'],
+  externalRepos: [],
+};

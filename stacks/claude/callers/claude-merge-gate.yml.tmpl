@@ -1,0 +1,89 @@
+name: Claude PR Merge Gate
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        required: false
+        type: string
+      merge_method:
+        required: false
+        type: choice
+        default: merge
+        options: [merge, squash, rebase]
+  workflow_run:
+    workflows:
+      - {{CLAUDE_WORKFLOW_NAME}}
+      - {{CI_WORKFLOW_NAME}}
+    types: [completed]
+  repository_dispatch:
+    types: [claude-merge-gate]
+
+concurrency:
+  group: claude-merge-gate-${{ github.repository }}-${{ github.event.inputs.pr_number || github.event.client_payload.pr_number || github.event.workflow_run.id || 'scan' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+  actions: read
+
+jobs:
+  auto-dispatch:
+    if: github.event_name == 'workflow_run'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      actions: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: MervinPraison/github-automation-template/.github/actions/hub-setup@{{HUB_REF}}
+        with:
+          hub_ref: {{HUB_REF}}
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.CLAUDE_APP_ID }}
+          private-key: ${{ secrets.CLAUDE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+      - name: Dispatch merge gate when PR pipeline is ready
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const path = require('path');
+            const mergeGate = require(path.join(process.env.HUB_SCRIPTS, 'merge-gate.js'));
+            const wr = context.payload.workflow_run;
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            if (wr.conclusion !== 'success') return;
+            const allowed = ['{{CLAUDE_WORKFLOW_NAME}}', '{{CI_WORKFLOW_NAME}}'];
+            if (!allowed.includes(wr.name)) return;
+            const prNumber = await mergeGate.resolvePrNumberFromWorkflowRun(github, owner, repo, wr);
+            if (!prNumber) return;
+            const fromClaude = wr.name === '{{CLAUDE_WORKFLOW_NAME}}';
+            const check = await mergeGate.evaluatePipelineQuiescent(github, owner, repo, prNumber, core, {
+              skipGlobalClaudeRunCheck: fromClaude,
+              skipRecentClaudeCooldown: fromClaude,
+            });
+            if (!check.ready) return;
+            await github.rest.repos.createDispatchEvent({
+              owner, repo, event_type: 'claude-merge-gate',
+              client_payload: { pr_number: prNumber },
+            });
+
+  merge-gate:
+    if: github.event_name != 'workflow_run'
+    uses: MervinPraison/github-automation-template/.github/workflows/claude-merge-gate-callable.yml@{{HUB_REF}}
+    secrets: inherit
+    with:
+      hub_ref: {{HUB_REF}}
+      pr_number: ${{ github.event.inputs.pr_number || github.event.client_payload.pr_number || '' }}
+      merge_method: ${{ github.event.inputs.merge_method || 'merge' }}

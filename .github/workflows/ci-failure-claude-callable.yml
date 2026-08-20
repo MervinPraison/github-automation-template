@@ -1,0 +1,59 @@
+name: CI Failure → Claude (callable)
+
+on:
+  workflow_call:
+    inputs:
+      hub_ref:
+        type: string
+        default: v1.1.0
+      pr_number:
+        type: string
+        default: ''
+
+permissions:
+  pull-requests: read
+  issues: write
+  actions: read
+
+jobs:
+  detect-and-trigger:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: MervinPraison/github-automation-template/.github/actions/hub-setup@${{ inputs.hub_ref }}
+        with:
+          hub_ref: ${{ inputs.hub_ref }}
+
+      - name: Detect CI failures and trigger Claude
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GH_TOKEN || github.token }}
+          script: |
+            const path = require('path');
+            const ciFix = require(path.join(process.env.HUB_SCRIPTS, 'ci-failure-claude.js'));
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const inputPr = '${{ inputs.pr_number }}'.trim();
+            if (inputPr) {
+              await ciFix.maybeTriggerCiFixClaude(github, owner, repo, parseInt(inputPr, 10), core);
+              return;
+            }
+            if (context.eventName === 'workflow_run') {
+              await ciFix.processWorkflowRunFailure(github, owner, repo, context.payload.workflow_run, core);
+              return;
+            }
+            const baseRepo = `${owner}/${repo}`;
+            const prs = await github.paginate(github.rest.pulls.list, { owner, repo, state: 'open', per_page: 100 });
+            for (const pr of prs) {
+              if (pr.draft || pr.head?.repo?.full_name !== baseRepo) continue;
+              const { data: issue } = await github.rest.issues.get({ owner, repo, issue_number: pr.number });
+              const labels = issue.labels.map((l) => l.name);
+              if (labels.includes('pipeline/blocked:ci') || labels.includes(ciFix.CI_FIX_LABEL)) {
+                await ciFix.maybeTriggerCiFixClaude(github, owner, repo, pr.number, core);
+              }
+            }

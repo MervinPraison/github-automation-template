@@ -1,0 +1,24 @@
+name: Hub setup
+description: Checkout automation hub and set script paths for consumer repo workflows.
+inputs:
+  hub_ref:
+    description: Git ref of github-automation-template (tag or branch)
+    required: false
+    default: v1.1.0
+  hub_repo:
+    description: Hub repository owner/name
+    required: false
+    default: MervinPraison/github-automation-template
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v4
+      with:
+        repository: ${{ inputs.hub_repo }}
+        ref: ${{ inputs.hub_ref }}
+        path: _hub
+    - shell: bash
+      run: |
+        echo "HUB_SCRIPTS=${{ github.workspace }}/_hub/.github/scripts" >> "$GITHUB_ENV"
+        echo "GATE_CONFIG_PATH=${{ github.workspace }}/.github/scripts/gate-config.js" >> "$GITHUB_ENV"
+        echo "HUB_ACTIONS=${{ github.workspace }}/_hub/.github/actions" >> "$GITHUB_ENV"

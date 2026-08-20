@@ -1,0 +1,28 @@
+name: Auto PR Comment
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+  pull_request:
+    types: [opened, synchronize]
+  pull_request_target:
+    types: [opened, synchronize]
+  schedule:
+    - cron: '30 3,9,15,21 * * *'
+  workflow_dispatch:
+
+env:
+  REVIEW_CHAIN_SKIP_COPILOT: '1'
+
+permissions:
+  issues: write
+  pull-requests: read
+
+jobs:
+  review-chain:
+    uses: MervinPraison/github-automation-template/.github/workflows/review-chain-callable.yml@{{HUB_REF}}
+    secrets: inherit
+    with:
+      hub_ref: {{HUB_REF}}

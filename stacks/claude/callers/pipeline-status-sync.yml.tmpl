@@ -1,0 +1,19 @@
+name: Pipeline Status Sync
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+permissions:
+  pull-requests: read
+  issues: write
+  actions: write
+  id-token: write
+
+jobs:
+  sync:
+    uses: MervinPraison/github-automation-template/.github/workflows/pipeline-status-sync-callable.yml@{{HUB_REF}}
+    secrets: inherit
+    with:
+      hub_ref: {{HUB_REF}}

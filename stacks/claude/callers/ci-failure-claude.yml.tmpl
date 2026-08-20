@@ -1,0 +1,32 @@
+name: Auto CI Failure → Claude
+
+on:
+  workflow_run:
+    workflows: [{{CI_WORKFLOW_NAME}}, {{CI_FAILURE_WORKFLOW_NAME}}]
+    types: [completed]
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        required: false
+        type: string
+  schedule:
+    - cron: '15 */6 * * *'
+
+concurrency:
+  group: ci-failure-scan-${{ github.repository }}-${{ github.event.pull_request.number || github.event.workflow_run.id || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  pull-requests: read
+  issues: write
+  actions: read
+
+jobs:
+  detect-and-trigger:
+    uses: MervinPraison/github-automation-template/.github/workflows/ci-failure-claude-callable.yml@{{HUB_REF}}
+    secrets: inherit
+    with:
+      hub_ref: {{HUB_REF}}
+      pr_number: ${{ github.event.inputs.pr_number || '' }}

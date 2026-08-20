@@ -1,0 +1,54 @@
+/**
+ * Per-repo gate configuration — customisable after install.
+ * @see github-automation-template README
+ */
+
+module.exports = {
+  repoFullName: '{{OWNER}}/{{REPO}}',
+  gitUser: '{{GIT_USER}}',
+  gitEmail: '{{GIT_EMAIL}}',
+  triggerLogins: ['{{GIT_USER}}', 'github-actions[bot]'],
+  allowedTriageBots: ['praisonai-triage-agent[bot]'],
+  productPathPrefixes: ['{{SDK_PATH_PREFIX_1}}', '{{SDK_PATH_PREFIX_2}}'],
+  sensitivePathPatterns: [
+    /^\.github\/workflows\//,
+    /praisonaiagents\/(auth|approval|policy|sandbox)\//,
+    /^src\/praisonai-agents\/pyproject\.toml$/,
+    /^src\/praisonai\/pyproject\.toml$/,
+    /\.env(\.|$)/,
+    /credentials\.json$/i,
+  ],
+  requiredCheckPatterns: [/test/i, /smoke/i, /core/i, /python package/i, /comprehensive/i, /optimized/i],
+  optionalCancelledChecks: ['detect-and-trigger'],
+  optionalCancelledWhenCoreGreen: ['smoke', 'test-windows'],
+  ciWorkflowFile: '{{CI_WORKFLOW_FILE}}',
+  ciWorkflowName: '{{CI_WORKFLOW_NAME}}',
+  claudeWorkflowName: '{{CLAUDE_WORKFLOW_NAME}}',
+  mergeGateWorkflowRuns: ['{{CLAUDE_WORKFLOW_NAME}}', '{{CI_WORKFLOW_NAME}}'],
+  ciFailureWorkflowRuns: ['{{CI_WORKFLOW_NAME}}', '{{CI_FAILURE_WORKFLOW_NAME}}'],
+  testCommand: "{{TEST_COMMAND}}",
+  docsUrl: '{{DOCS_URL}}',
+  architectureDoc: 'AGENTS.md',
+  pypiPackageName: '{{PYPI_PACKAGE_NAME}}',
+  packagePaths: ['{{SDK_PATH_PREFIX_1}}', '{{SDK_PATH_PREFIX_2}}'],
+  finalClaudeScope:
+    'SCOPE: Focus ONLY on Python packages ({{PRODUCT_NAME}}). '
+    + 'Do NOT modify unrelated paths. Read ALL comments above from Gemini, Qodo, CodeRabbit, and Copilot carefully before responding.',
+  finalClaudeProductValue:
+    '4. Product value: review in depth whether the change genuinely adds value — never add features for the sake of adding them. '
+    + 'It must strengthen the SDK (simpler, more user-friendly, robust). If it does not clearly add value, request changes or recommend rejecting/closing rather than merging scope creep.\n'
+    + '5. Do not bloat core classes with additional params — only if absolutely required.\n'
+    + '6. Repo routing: agent-callable tools → external tools repo; lifecycle plugins → plugins repo — request changes if wrongly added to core SDK.',
+  mergeGateProductValue:
+    'Confirm product value gate: change strengthens the product (no scope creep). BLOCK changes that duplicate existing capabilities or add knobs with no live consumer.',
+  mergeGateLayering:
+    'Layering routing: BLOCK if core logic was added to the wrong repo or layer.',
+  agentPyChecks: true,
+  agentPyPathSuffix: 'praisonaiagents/agent/agent.py',
+  reviewBotLogins: [
+    'coderabbitai[bot]',
+    'qodo-code-review[bot]',
+    'greptile-apps[bot]',
+  ],
+  externalRepos: [],
+};

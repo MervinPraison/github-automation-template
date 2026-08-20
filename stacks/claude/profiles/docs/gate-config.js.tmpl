@@ -1,0 +1,29 @@
+/**
+ * Docs profile gate configuration — lighter merge gate (Sonnet assess, no FINAL chain required).
+ */
+module.exports = {
+  repoFullName: '{{OWNER}}/{{REPO}}',
+  gitUser: '{{GIT_USER}}',
+  gitEmail: '{{GIT_EMAIL}}',
+  triggerLogins: ['{{GIT_USER}}', 'github-actions[bot]'],
+  productPathPrefixes: ['docs/', 'src/'],
+  sensitivePathPatterns: [/^\.github\/workflows\//, /credentials\.json$/i],
+  requiredCheckPatterns: [/test/i, /lint/i, /nav/i, /build/i],
+  optionalCancelledChecks: ['detect-and-trigger'],
+  optionalCancelledWhenCoreGreen: [],
+  ciWorkflowFile: '{{CI_WORKFLOW_FILE}}',
+  ciWorkflowName: '{{CI_WORKFLOW_NAME}}',
+  claudeWorkflowName: '{{CLAUDE_WORKFLOW_NAME}}',
+  mergeGateWorkflowRuns: ['{{CLAUDE_WORKFLOW_NAME}}'],
+  ciFailureWorkflowRuns: [],
+  testCommand: "{{TEST_COMMAND}}",
+  docsUrl: '{{DOCS_URL}}',
+  architectureDoc: 'AGENTS.md',
+  finalClaudeScope: 'SCOPE: Focus ONLY on documentation and site content for {{REPO}}.',
+  finalClaudeProductValue: '4. Docs value: clear, accurate, beginner-friendly content only.',
+  mergeGateProductValue: 'Confirm docs change improves clarity without scope creep.',
+  mergeGateLayering: '',
+  agentPyChecks: false,
+  reviewBotLogins: ['coderabbitai[bot]', 'greptile-apps[bot]'],
+  externalRepos: [],
+};

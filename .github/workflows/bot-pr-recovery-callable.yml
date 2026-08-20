@@ -1,0 +1,45 @@
+name: Bot PR Recovery (callable)
+
+on:
+  workflow_call:
+    inputs:
+      hub_ref:
+        type: string
+        default: v1.1.0
+      pr_number:
+        type: string
+        default: ''
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: MervinPraison/github-automation-template/.github/actions/hub-setup@${{ inputs.hub_ref }}
+        with:
+          hub_ref: ${{ inputs.hub_ref }}
+
+      - name: Find and kick stalled bot PRs
+        uses: actions/github-script@v7
+        env:
+          PR_NUMBER_INPUT: ${{ inputs.pr_number }}
+        with:
+          github-token: ${{ secrets.GH_TOKEN }}
+          script: |
+            const path = require('path');
+            const chain = require(path.join(process.env.HUB_SCRIPTS, 'bot-pr-review-chain.js'));
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const manual = (process.env.PR_NUMBER_INPUT || '').trim();
+            const prNumber = manual ? parseInt(manual, 10) : null;
+            if (manual && Number.isNaN(prNumber)) {
+              throw new Error(`Invalid pr_number: ${manual}`);
+            }
+            await chain.recoverStalledBotPrs(github, owner, repo, { prNumber }, core);
