@@ -1,2 +1,3 @@
 # Created by validate.sh for selftests — do not commit
 stacks/claude/shared/scripts/gate-config.js
+.github/scripts/gate-config.js
