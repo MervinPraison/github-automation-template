@@ -44,7 +44,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: MervinPraison/github-automation-template/.github/actions/hub-setup@${{ inputs.hub_ref }}
+      - uses: MervinPraison/github-automation-template/.github/actions/hub-setup@main
         with:
           hub_ref: ${{ inputs.hub_ref }}
 
@@ -335,7 +335,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: MervinPraison/github-automation-template/.github/actions/hub-setup@${{ inputs.hub_ref }}
+      - uses: MervinPraison/github-automation-template/.github/actions/hub-setup@main
         with:
           hub_ref: ${{ inputs.hub_ref }}
 
