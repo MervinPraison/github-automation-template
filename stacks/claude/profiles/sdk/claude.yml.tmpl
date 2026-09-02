@@ -129,9 +129,12 @@ jobs:
     # Allow: human users, github-actions[bot] (FINAL @claude / CI-fix comments)
     # Allow: praisonai-triage-agent[bot] only for issues labeled 'claude' (auto-triage)
     # Block: praisonai-triage-agent on issue_comment (merge-gate scan mentions @claude)
-    # Skip 'opened' events — triage job handles those above
+    # Skip plain 'opened' unless the issue was created with `claude` already (bot-routed issues)
     if: |
-      github.event.action != 'opened' &&
+      (
+        github.event.action != 'opened' ||
+        contains(toJSON(github.event.issue.labels), 'claude')
+      ) &&
       (github.event.action != 'labeled' || github.event.label.name == 'claude') &&
       (github.event_name != 'issue_comment' || (
         contains(github.event.comment.body, '@claude') &&
