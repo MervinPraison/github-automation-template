@@ -278,6 +278,10 @@ jobs:
             git remote set-url origin "file://$(pwd)"
           fi
 
+      - uses: MervinPraison/github-automation-template/.github/actions/hub-setup@main
+        with:
+          hub_ref: ${{ inputs.hub_ref }}
+
       - uses: ./_hub/.github/actions/claude-code-action
         env:
           GH_TOKEN: ${{ steps.check_fork.outputs.can_push_fork == 'true' && secrets.GH_TOKEN || steps.app-token.outputs.token }}
