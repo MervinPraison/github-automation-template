@@ -81,6 +81,12 @@ jobs:
 
   merge-gate:
     if: github.event_name != 'workflow_run'
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: read
+      id-token: write
     uses: MervinPraison/github-automation-template/.github/workflows/claude-merge-gate-callable.yml@{{HUB_REF}}
     secrets: inherit
     with:
