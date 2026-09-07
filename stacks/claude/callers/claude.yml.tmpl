@@ -12,6 +12,12 @@ on:
 
 jobs:
   claude:
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: read
+      id-token: write
     uses: MervinPraison/github-automation-template/.github/workflows/claude-assistant-callable.yml@{{HUB_REF}}
     secrets: inherit
     with:
