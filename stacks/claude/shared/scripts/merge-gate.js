@@ -6,7 +6,18 @@
 const { resolveGateConfigPath } = require('./hub-paths.js');
 const config = require(resolveGateConfigPath());
 
-const CLAUDE_TRIGGER_LOGINS = config.triggerLogins || ['github-actions[bot]'];
+function resolveTriggerLogins(gateConfig) {
+  if (Array.isArray(gateConfig.triggerLogins) && gateConfig.triggerLogins.length > 0) {
+    return gateConfig.triggerLogins;
+  }
+  const logins = new Set(['github-actions[bot]']);
+  if (gateConfig.gitUser) logins.add(gateConfig.gitUser);
+  const owner = (gateConfig.repoFullName || '').split('/')[0];
+  if (owner) logins.add(owner);
+  return [...logins];
+}
+
+const CLAUDE_TRIGGER_LOGINS = resolveTriggerLogins(config);
 const AUTO_ACTORS = CLAUDE_TRIGGER_LOGINS;
 const CONFLICT_COOLDOWN_MS = 12 * 60 * 60 * 1000;
 const CLAUDE_ACTIVE_MS = 35 * 60 * 1000;
@@ -77,7 +88,11 @@ function isClaudeFinalReplyComment(c) {
     login.includes('github-actions') ||
     AUTO_ACTORS.some((a) => a.toLowerCase() === login);
   if (!fromAutomation) return false;
-  return (c.body || '').includes('Claude finished');
+  const body = c.body || '';
+  if (body.includes('Claude finished')) return true;
+  // Hub assistant posts structured FINAL reviews without the action wrapper.
+  if (/final architecture review/i.test(body)) return true;
+  return false;
 }
 
 function hasRecentClaudeTrigger(comments, minutes = 35) {
@@ -947,6 +962,7 @@ function findMergeGateVerdict(comments, minCreatedAt = null, headPushedAt = null
 }
 
 module.exports = {
+  resolveTriggerLogins,
   CLAUDE_TRIGGER_LOGINS,
   AUTO_ACTORS,
   isFinalClaudeTriggerComment,

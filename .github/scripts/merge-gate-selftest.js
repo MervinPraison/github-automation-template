@@ -38,6 +38,32 @@ const withClaudeReply = [
 assert('not stale when Claude replied after FINAL', !mg.isStaleFinalAfterPush(withClaudeReply, '2026-06-12T09:00:00Z'));
 assert('claude final reply detected', mg.isClaudeFinalReplyComment(withClaudeReply[1]));
 
+const triageFinalReview = {
+  user: { login: 'praisonai-triage-agent[bot]' },
+  body: '## Final Architecture Review — Verdict: ✅ Approve\n\nLGTM.',
+  created_at: '2026-06-12T08:30:00Z',
+};
+assert('triage FINAL architecture review detected', mg.isClaudeFinalReplyComment(triageFinalReview));
+
+const withTriageFinal = [...finals, triageFinalReview];
+assert(
+  'not stale when triage FINAL review after trigger',
+  !mg.isStaleFinalAfterPush(withTriageFinal, '2026-06-12T09:00:00Z')
+);
+
+assert(
+  'resolveTriggerLogins falls back to repo owner',
+  mg.resolveTriggerLogins({ repoFullName: 'MervinPraison/PraisonAIUI' }).includes('MervinPraison')
+);
+assert(
+  'resolveTriggerLogins keeps github-actions[bot]',
+  mg.resolveTriggerLogins({ repoFullName: 'MervinPraison/PraisonAIUI' }).includes('github-actions[bot]')
+);
+assert(
+  'resolveTriggerLogins prefers explicit config',
+  mg.resolveTriggerLogins({ triggerLogins: ['custom-bot'], repoFullName: 'X/Y' }).join() === 'custom-bot'
+);
+
 assert('cancelled detect-and-trigger does not block', mg.OPTIONAL_CANCELLED_CHECKS.has('detect-and-trigger'));
 
 const coreGreenRuns = [
