@@ -34,9 +34,10 @@ This repo is **not** runtime code for your product. It is a **template hub** —
 
 ### Hub repo (once)
 
-- [ ] `MervinPraison/github-automation-template` exists and is tagged (`v1.1.0`)
+- [ ] `MervinPraison/github-automation-template` exists and is tagged (`v1.1.8+`)
 - [ ] Settings → Actions → General → **Access** → repositories can use reusable workflows
-- [ ] Hub secrets for sync: `SECRETS_ADMIN_PAT`, `CLAUDE_APP_ID`, `CLAUDE_APP_PRIVATE_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `GH_TOKEN`
+- [ ] Hub secrets for sync: `SECRETS_ADMIN_PAT`, `CLAUDE_APP_ID`, `CLAUDE_APP_PRIVATE_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN_B`, `GH_TOKEN`
+- [ ] Hub variable: `CLAUDE_OAUTH_ACTIVE` (`primary` or `secondary`)
 
 ### Target repo (each repo)
 
@@ -45,7 +46,8 @@ This repo is **not** runtime code for your product. It is a **template hub** —
 - [ ] `AGENTS.md` or architecture doc at repo root (referenced in prompts)
 - [ ] GitHub App installed: Claude automation app
 - [ ] Third-party apps: **CodeRabbit** + **Greptile** (minimum for review chain)
-- [ ] Secrets will be set: `CLAUDE_APP_ID`, `CLAUDE_APP_PRIVATE_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `GH_TOKEN`
+- [ ] Secrets will be set: `CLAUDE_APP_ID`, `CLAUDE_APP_PRIVATE_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN_B`, `GH_TOKEN`
+- [ ] Variable: `CLAUDE_OAUTH_ACTIVE` (`primary` default)
 
 ---
 

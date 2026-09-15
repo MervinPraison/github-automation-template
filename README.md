@@ -209,8 +209,11 @@ jobs:
 |--------|---------|
 | `CLAUDE_APP_ID` | GitHub App for Claude execution |
 | `CLAUDE_APP_PRIVATE_KEY` | App private key |
-| `CLAUDE_CODE_OAUTH_TOKEN` | Claude Code OAuth |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Claude Code OAuth (primary) |
+| `CLAUDE_CODE_OAUTH_TOKEN_B` | Claude Code OAuth (secondary backup) |
 | `GH_TOKEN` | PAT as maintainer — chains `@claude` between workflows (`GITHUB_TOKEN` alone cannot) |
+
+**Repo variable:** `CLAUDE_OAUTH_ACTIVE` — `primary` (default) or `secondary`. Workflows probe the active slot and fail over on 401/429 (v1.1.8+).
 
 ---
 
