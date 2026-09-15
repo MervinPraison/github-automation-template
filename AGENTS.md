@@ -172,7 +172,9 @@ Or set manually in target repo → Settings → Secrets:
 |--------|-------------|
 | `CLAUDE_APP_ID` | GitHub App ID |
 | `CLAUDE_APP_PRIVATE_KEY` | PEM private key |
-| `CLAUDE_CODE_OAUTH_TOKEN` | Claude Code OAuth token |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Claude Code OAuth token (primary) |
+| `CLAUDE_CODE_OAUTH_TOKEN_B` | Claude Code OAuth token (secondary backup) |
+| `CLAUDE_OAUTH_ACTIVE` | Repo variable: `primary` or `secondary` (preferred slot) |
 | `GH_TOKEN` | Personal access token (maintainer account) for `@claude` chaining |
 
 ### Step 5 — Enable GitHub Apps on target repo
