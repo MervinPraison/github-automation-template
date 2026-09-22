@@ -274,7 +274,7 @@ runs:
         echo "🚀 Running Claude Code with GitHub context..."
         
         # Build command arguments
-        CMD_ARGS=("-p" "--verbose" "--output-format" "stream-json")
+        CMD_ARGS=("-p" "--verbose" "--output-format" "stream-json" "--dangerously-skip-permissions")
         
         if [[ -n "$INPUT_MODEL" ]]; then
           CMD_ARGS+=("--model" "$INPUT_MODEL")
@@ -287,7 +287,7 @@ runs:
         fi
         
         # Add allowed tools (include GitHub tools by default)
-        TOOLS="mcp__github__get_issue,mcp__github__get_issue_comments,mcp__github__update_issue,mcp__github__search_issues,mcp__github__list_issues,mcp__github__create_comment,Read,Write,Edit,Bash"
+        TOOLS="mcp__github__get_issue,mcp__github__get_issue_comments,mcp__github__update_issue,mcp__github__search_issues,mcp__github__list_issues,mcp__github__add_issue_comment,mcp__github__get_pull_request,mcp__github__get_pull_request_files,mcp__github__get_pull_request_reviews,mcp__github__get_pull_request_status,mcp__github__get_pull_request_comments,Read,Write,Edit,Bash"
         if [[ -n "$INPUT_ALLOWED_TOOLS" ]]; then
           TOOLS="$TOOLS,$INPUT_ALLOWED_TOOLS"
         fi
@@ -327,6 +327,7 @@ runs:
         
         # Execute Claude Code with timeout, using stdin for the prompt
         TIMEOUT_SECONDS=$(($INPUT_TIMEOUT_MINUTES * 60))
-        timeout $TIMEOUT_SECONDS claude "${CMD_ARGS[@]}" < "$PROMPT_FILE"
+        timeout $TIMEOUT_SECONDS claude "${CMD_ARGS[@]}" < "$PROMPT_FILE" \
+          | tee "$GITHUB_WORKSPACE/.claude-assess-output.jsonl"
         
         echo "✅ Claude Code execution completed" 

@@ -175,7 +175,7 @@ jobs:
           hub_ref: ${{ inputs.hub_ref }}
 
       - name: Stash merge gate helpers
-        run: cp "${HUB_SCRIPTS}/merge-gate.js" /tmp/merge-gate.js
+        run: cp "${HUB_SCRIPTS}/merge-gate.js" "${HUB_SCRIPTS}/hub-paths.js" /tmp/
 
       - name: Fetch PR branch
         env:
@@ -194,6 +194,7 @@ jobs:
 
       - name: Claude merge gate assessment (read-only)
         id: assess
+        continue-on-error: true
         uses: ./_hub/.github/actions/claude-code-action
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -235,11 +236,81 @@ jobs:
             Write
             Replace
           allowed_tools: |
-            View
-            GlobTool
-            GrepTool
+            Glob
+            Grep
             Read
           timeout_minutes: 15
+
+      - name: Post Opus verdict from assess output if MCP missed
+        id: relay_verdict
+        if: always() && steps.assess.conclusion != 'skipped'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const fs = require('fs');
+            const mergeGate = require('/tmp/merge-gate.js');
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const prNumber = ${{ matrix.pr_number }};
+
+            const ctx = await mergeGate.loadPrContext(github, owner, repo, prNumber);
+            const minCreatedAt = new Date(Date.now() - 25 * 60 * 1000).toISOString();
+            const existing = mergeGate.findMergeGateVerdict(
+              ctx.comments, minCreatedAt, ctx.headPushedAt, { excludeAutomatedFallback: true }
+            );
+            if (existing) {
+              core.info(`Opus verdict already on PR: ${existing}`);
+              return;
+            }
+
+            const outPath = `${process.env.GITHUB_WORKSPACE}/.claude-assess-output.jsonl`;
+            if (!fs.existsSync(outPath)) {
+              core.info('No assess output file to relay');
+              return;
+            }
+
+            const lines = fs.readFileSync(outPath, 'utf8').split('\n').filter(Boolean);
+            let verdict = null;
+            for (let i = lines.length - 1; i >= 0; i--) {
+              const line = lines[i];
+              if (line.includes('MERGE_GATE_VERDICT: APPROVE')) {
+                verdict = 'APPROVE';
+                break;
+              }
+              if (line.includes('MERGE_GATE_VERDICT: BLOCK')) {
+                verdict = 'BLOCK';
+                break;
+              }
+              try {
+                const evt = JSON.parse(line);
+                const text = JSON.stringify(evt);
+                if (text.includes('MERGE_GATE_VERDICT: APPROVE')) {
+                  verdict = 'APPROVE';
+                  break;
+                }
+                if (text.includes('MERGE_GATE_VERDICT: BLOCK')) {
+                  verdict = 'BLOCK';
+                  break;
+                }
+              } catch {
+                // Not JSON — keep scanning.
+              }
+            }
+            if (!verdict) {
+              core.info('Assess output had no MERGE_GATE_VERDICT to relay');
+              return;
+            }
+
+            const body = [
+              `MERGE_GATE_VERDICT: ${verdict}`,
+              '',
+              'Relayed from Opus merge gate assess output (GitHub MCP comment post was unavailable).',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: prNumber, body,
+            });
+            core.info(`Relayed Opus verdict to PR comment: ${verdict}`);
 
       - name: Post fallback BLOCK if Opus did not comment
         id: fallback_verdict
