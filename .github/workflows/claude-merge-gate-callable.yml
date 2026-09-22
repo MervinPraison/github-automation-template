@@ -46,7 +46,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: MervinPraison/github-automation-template/.github/actions/hub-setup@${{ inputs.hub_ref }}
+      - uses: MervinPraison/github-automation-template/.github/actions/hub-setup@v1.1.10
         with:
           hub_ref: ${{ inputs.hub_ref }}
 
@@ -170,7 +170,7 @@ jobs:
               labels: ['claude-merge-gate-active'],
             });
 
-      - uses: MervinPraison/github-automation-template/.github/actions/hub-setup@${{ inputs.hub_ref }}
+      - uses: MervinPraison/github-automation-template/.github/actions/hub-setup@v1.1.10
         with:
           hub_ref: ${{ inputs.hub_ref }}
 
@@ -420,7 +420,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: MervinPraison/github-automation-template/.github/actions/hub-setup@${{ inputs.hub_ref }}
+      - uses: MervinPraison/github-automation-template/.github/actions/hub-setup@v1.1.10
         with:
           hub_ref: ${{ inputs.hub_ref }}
 
