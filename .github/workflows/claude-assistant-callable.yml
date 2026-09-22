@@ -280,7 +280,7 @@ jobs:
             git remote set-url origin "file://$(pwd)"
           fi
 
-      - uses: MervinPraison/github-automation-template/.github/actions/hub-setup@main
+      - uses: MervinPraison/github-automation-template/.github/actions/hub-setup@${{ inputs.hub_ref }}
         with:
           hub_ref: ${{ inputs.hub_ref }}
 

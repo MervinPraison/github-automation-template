@@ -46,7 +46,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: MervinPraison/github-automation-template/.github/actions/hub-setup@main
+      - uses: MervinPraison/github-automation-template/.github/actions/hub-setup@${{ inputs.hub_ref }}
         with:
           hub_ref: ${{ inputs.hub_ref }}
 
@@ -170,12 +170,9 @@ jobs:
               labels: ['claude-merge-gate-active'],
             });
 
-      - uses: MervinPraison/github-automation-template/.github/actions/hub-setup@main
+      - uses: MervinPraison/github-automation-template/.github/actions/hub-setup@${{ inputs.hub_ref }}
         with:
           hub_ref: ${{ inputs.hub_ref }}
-
-      - name: Stash merge gate helpers
-        run: cp "${HUB_SCRIPTS}/merge-gate.js" "${HUB_SCRIPTS}/hub-paths.js" /tmp/
 
       - name: Fetch PR branch
         env:
@@ -249,7 +246,8 @@ jobs:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
             const fs = require('fs');
-            const mergeGate = require('/tmp/merge-gate.js');
+            const path = require('path');
+            const mergeGate = require(path.join(process.env.HUB_SCRIPTS, 'merge-gate.js'));
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const prNumber = ${{ matrix.pr_number }};
@@ -319,7 +317,8 @@ jobs:
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
-            const mergeGate = require('/tmp/merge-gate.js');
+            const path = require('path');
+            const mergeGate = require(path.join(process.env.HUB_SCRIPTS, 'merge-gate.js'));
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const prNumber = ${{ matrix.pr_number }};
@@ -358,7 +357,8 @@ jobs:
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
-            const mergeGate = require('/tmp/merge-gate.js');
+            const path = require('path');
+            const mergeGate = require(path.join(process.env.HUB_SCRIPTS, 'merge-gate.js'));
             const comments = await mergeGate.listAllComments(
               github, context.repo.owner, context.repo.repo, ${{ matrix.pr_number }}
             );
@@ -420,7 +420,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: MervinPraison/github-automation-template/.github/actions/hub-setup@main
+      - uses: MervinPraison/github-automation-template/.github/actions/hub-setup@${{ inputs.hub_ref }}
         with:
           hub_ref: ${{ inputs.hub_ref }}
 
