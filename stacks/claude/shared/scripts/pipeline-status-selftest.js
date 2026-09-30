@@ -73,4 +73,31 @@ assert(
   )
 );
 
-process.exit(failed ? 1 : 0);
+(async () => {
+  for (const status of [422, 403]) {
+    let createAttempts = 0;
+    const github = {
+      rest: {
+        issues: {
+          listLabelsForRepo: async () => ({ data: [] }),
+          createLabel: async () => {
+            createAttempts += 1;
+            const err = new Error('label create failed');
+            err.status = status;
+            throw err;
+          },
+        },
+      },
+    };
+    try {
+      await ps.ensurePipelineLabels(github, 'owner', 'repo', { info: () => {} });
+      assert(`ensurePipelineLabels skips ${status}`, createAttempts === ps.ALL_PIPELINE_LABELS.length);
+    } catch (e) {
+      assert(`ensurePipelineLabels skips ${status}`, false);
+    }
+  }
+  process.exit(failed ? 1 : 0);
+})().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});

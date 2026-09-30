@@ -119,8 +119,12 @@ async function ensurePipelineLabels(github, owner, repo, core) {
       });
       core?.info?.(`Created label ${spec.name}`);
     } catch (err) {
-      if (err.status !== 422) throw err;
-      core?.info?.(`Label ${spec.name} already exists`);
+      // 422: race / already exists; 403: token lacks label admin (forks, fine-grained PAT)
+      if (err.status === 422 || err.status === 403) {
+        core?.info?.(`Label ${spec.name} create skipped (${err.status})`);
+        continue;
+      }
+      throw err;
     }
   }
 }
