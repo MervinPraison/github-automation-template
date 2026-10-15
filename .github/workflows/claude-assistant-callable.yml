@@ -274,7 +274,7 @@ jobs:
             core.setOutput('is_pr', 'true');
             core.setOutput('pr_number', String(prNumber));
             core.setOutput('pr_branch', pr.data.head.ref);
-            core.setOutput('head_repo', pr.data.head.repo.full_name);
+            core.setOutput('head_repo', pr.data.head.repo?.full_name || '');
             core.setOutput('merge_state', mergeState);
 
             const baseRepo = `${context.repo.owner}/${context.repo.repo}`;
