@@ -10,7 +10,7 @@ Guide for humans and AI agents: how to add the **claude** automation stack from 
 |------|-------|
 | Hub repo | `MervinPraison/github-automation-template` |
 | Current stack | `claude` (issue→PR→review→merge gate) |
-| Current version | `v1.1.0` (see `stacks/claude/VERSION`) |
+| Current version | `v1.1.15` (see `stacks/claude/VERSION`) |
 | Default install mode | **hub** — thin callers + central callables |
 | Legacy mode | **copy** — full `.github/` copied to target |
 
@@ -213,10 +213,10 @@ Fix any `WARN: no workflow named 'X'` by aligning `gate-config.js` or CI workflo
 | Field | Type | Purpose |
 |-------|------|---------|
 | `repoFullName` | string | `owner/repo` for prompts and fork detection |
-| `gitUser` | string | Git commit author for Claude fixes |
-| `gitEmail` | string | Git commit email |
+| `gitUser` | string | Git commit author for Claude fixes (Claude Assistant prompt) |
+| `gitEmail` | string | Git commit email (Claude Assistant prompt; default `454862+MervinPraison@users.noreply.github.com`) |
 | `triggerLogins` | string[] | Users/bots allowed to trigger review chain |
-| `allowedTriageBots` | string[] | Bots allowed to auto-label issues `claude` |
+| `allowedTriageBots` | string[] | App bot login(s) the automation posts as; only these and `github-actions[bot]` count as merge gate verdict authors (default `praisonai-triage-agent[bot]`) |
 | `productPathPrefixes` | string[] | Directories counted as product code |
 | `sensitivePathPatterns` | RegExp[] | Paths requiring manual merge review |
 | `requiredCheckPatterns` | RegExp[] | CI check name patterns for merge gate |
@@ -227,15 +227,17 @@ Fix any `WARN: no workflow named 'X'` by aligning `gate-config.js` or CI workflo
 | `claudeWorkflowName` | string | **Must match** `claude.yml` `name:` |
 | `mergeGateWorkflowRuns` | string[] | Workflows that trigger merge gate dispatch |
 | `ciFailureWorkflowRuns` | string[] | Workflows that trigger CI failure bot |
-| `testCommand` | string | Test command in Claude fix prompts |
+| `testCommand` | string | Test command in Claude fix prompts (empty: Claude follows AGENTS.md / README) |
+| `maxAutoAdditions` | number | Added lines above which auto-merge needs manual review (default 800) |
+| `maxAutoFiles` | number | Changed files above which auto-merge needs manual review (default 30) |
 | `docsUrl` | string | Documentation URL in triage comments |
 | `architectureDoc` | string | Architecture file Claude reads (usually `AGENTS.md`) |
 | `pypiPackageName` | string | Package name for release-related gates |
 | `packagePaths` | string[] | Paths watched for package changes |
-| `finalClaudeScope` | string | FINAL review scope prompt |
+| `finalClaudeScope` | string | Scope line in the FINAL review and Claude Assistant prompts |
 | `finalClaudeProductValue` | string | FINAL review product-value rules |
-| `mergeGateProductValue` | string | Merge gate product-value check |
-| `mergeGateLayering` | string | Merge gate repo-layer rules |
+| `mergeGateProductValue` | string | Merge gate prompt: product-value check |
+| `mergeGateLayering` | string | Merge gate prompt: repo-layer rules |
 | `agentPyChecks` | boolean | Enforce agent.py size/param limits |
 | `agentPyPathSuffix` | string | Path suffix for agent.py checks |
 | `reviewBotLogins` | string[] | Known review bot logins |
@@ -285,6 +287,9 @@ Review the diff, commit, push to target repo default branch.
 |---------|--------------|-----|
 | Merge gate never runs | `ciWorkflowName` mismatch | Align `gate-config.js` with CI `name:` |
 | `@claude` does not trigger workflow | Missing or wrong `GH_TOKEN` | Set PAT secret; must be maintainer user |
+| `@claude` skipped, or fails at "Authorize requester" | Commenter lacks write access (by design) | A maintainer comments `@claude` or adds the `claude` label |
+| External issue not picked up by Claude | Only issues from users with write access are auto-labelled `claude` (v1.1.15+) | A maintainer comments `@claude` or adds the `claude` label |
+| PR shows `pipeline/blocked:merge-gate` | Gate BLOCKed this HEAD; held out until a commit, a newer check, or 24 h | Push a fix (Claude is asked once per HEAD when `GH_TOKEN` is set) |
 | Review chain stuck 30m | Greptile not installed | Install Greptile app or adjust chain config |
 | `uses: ... callable.yml@v1.1.0` fails | Hub access denied | Enable reusable workflow access on hub repo |
 | Workflow not found on private hub | Tag not pushed | `git push origin v1.1.0` |
@@ -322,9 +327,9 @@ When asked to add automation to repo `owner/name`:
 
 | Task | Command |
 |------|---------|
-| Run selftests | `./validate.sh` |
-| Bump version | Edit `stacks/claude/VERSION`, tag `vX.Y.Z`, push tag |
+| Run selftests | `./validate.sh` (selftests, actionlint, hub vs copy-mode drift check) |
+| Bump version | Edit `stacks/claude/VERSION` in the commit you tag; bump `hub-setup@v…` pins in the callables too if `.github/actions/hub-setup/` changed (see README → Development); tag `vX.Y.Z`, push tag |
 | Add new stack | Create `stacks/<name>/` with callers, profiles, shared |
-| Copy mode fallback | Keep `stacks/claude/shared/` in sync with `.github/scripts/` |
+| Copy mode fallback | Keep `stacks/claude/shared/` in sync with `.github/scripts/` and `.github/actions/` (`validate.sh` fails on drift); regenerate `profiles/sdk/claude.yml.tmpl` from `claude-assistant-callable.yml` |
 
 Protocol: hub repo holds **implementations**; target repos hold **triggers + gate-config only**.
