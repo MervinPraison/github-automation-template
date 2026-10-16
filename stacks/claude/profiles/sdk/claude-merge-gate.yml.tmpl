@@ -127,6 +127,7 @@ jobs:
     outputs:
       matrix: ${{ steps.scan.outputs.matrix }}
       has_candidates: ${{ steps.scan.outputs.has_candidates }}
+      fix_requests: ${{ steps.scan.outputs.fix_requests }}
     steps:
       - uses: actions/checkout@v4
 
@@ -164,7 +165,12 @@ jobs:
               if (result.ready) {
                 candidates.push({ pr_number: n, head_sha: result.headSha });
               } else {
-                skipped.push({ pr: n, reasons: result.reasons });
+                skipped.push({
+                  pr: n,
+                  reasons: result.reasons,
+                  head_sha: result.headSha,
+                  block_fix_due: !!result.blockFixDue,
+                });
               }
             } else {
               const prNumbers = await mergeGate.listPrNumbersForMergeGateScan(
@@ -178,6 +184,12 @@ jobs:
             }
 
             core.info('Skipped: ' + JSON.stringify(skipped));
+            // PRs held out because the gate already BLOCKed their HEAD: ask
+            // Claude (once per HEAD, capped) to fix the findings.
+            const fixRequests = skipped
+              .filter((s) => s.block_fix_due && s.head_sha)
+              .map((s) => ({ pr: s.pr, head_sha: s.head_sha }));
+            core.setOutput('fix_requests', JSON.stringify(fixRequests));
             core.setOutput('matrix', JSON.stringify({ include: candidates }));
             core.setOutput('has_candidates', candidates.length > 0 ? 'true' : 'false');
 
@@ -196,17 +208,63 @@ jobs:
                 '**Actions:** wait for CI and the Claude review chain, or add label `needs-manual-review` and merge manually.',
                 '**Opt out:** label `no-auto-merge`.',
               ].join('\n');
-              await github.rest.issues.createComment({
-                owner, repo, issue_number: skipped[0].pr, body,
-              });
+              const ctx = await mergeGate.loadPrContext(github, owner, repo, skipped[0].pr);
+              if (!mergeGate.hasRecentMergeGateScanComment(ctx.comments)) {
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number: skipped[0].pr, body,
+                });
+              }
             } else if (inputPr && candidates.length === 1) {
-              await github.rest.issues.createComment({
-                owner, repo, issue_number: candidates[0].pr_number,
-                body: '**Merge gate scan** — eligible for assessment. Claude merge gate will assess and may auto-merge if `MERGE_GATE_VERDICT: APPROVE`.',
-              });
+              const prNum = candidates[0].pr_number;
+              const ctx = await mergeGate.loadPrContext(github, owner, repo, prNum);
+              if (!mergeGate.hasRecentMergeGateScanComment(ctx.comments)) {
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number: prNum,
+                  body: '**Merge gate scan** — eligible for assessment. Claude merge gate will assess and may auto-merge on an APPROVE verdict.',
+                });
+              }
             }
 
-            await ps.syncOpenPullRequests(github, owner, repo, { maxPrs: 10 }, core);
+            // This run is the merge gate: re-dispatching it from here only queued
+            // more gate runs for the same PRs.
+            await ps.syncOpenPullRequests(github, owner, repo, { maxPrs: 10, dispatchMergeGate: false }, core);
+
+      - name: Ask Claude to fix merge gate BLOCK findings
+        # Scheduled scans only: they share one non-cancelling concurrency group, so two runs can never race to post the same request.
+        if: github.event_name == 'schedule' && steps.scan.outputs.fix_requests != '' && steps.scan.outputs.fix_requests != '[]'
+        uses: actions/github-script@v7
+        env:
+          FIX_REQUESTS: ${{ steps.scan.outputs.fix_requests }}
+          HAS_GH_TOKEN: ${{ secrets.GH_TOKEN != '' }}
+        with:
+          # Posted as the maintainer (like FINAL triggers) so the Claude Assistant
+          # accepts it; comments from the App bot are filtered out there.
+          github-token: ${{ secrets.GH_TOKEN || github.token }}
+          script: |
+            // github.token comments cannot start the Claude Assistant, and posting
+            // the marker anyway would use up this HEAD's request.
+            if (process.env.HAS_GH_TOKEN !== 'true') {
+              core.warning('GH_TOKEN secret missing — not posting merge gate fix requests');
+              return;
+            }
+            const path = require('path');
+            const mergeGate = require(path.join(process.env.GITHUB_WORKSPACE, '.github/scripts/merge-gate.js'));
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const requests = JSON.parse(process.env.FIX_REQUESTS || '[]');
+            for (const { pr, head_sha: headSha } of requests) {
+              // Re-evaluate on fresh state: a commit may have landed since the scan.
+              const fresh = await mergeGate.evaluatePipelineQuiescent(github, owner, repo, pr, core);
+              if (fresh.headSha !== headSha || !fresh.blockFixDue) {
+                core.info(`PR #${pr}: fix request no longer due for ${headSha.slice(0, 12)}`);
+                continue;
+              }
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: pr,
+                body: mergeGate.buildBlockFixRequestBody(headSha),
+              });
+              core.info(`PR #${pr}: asked Claude to fix BLOCK findings on ${headSha.slice(0, 12)}`);
+            }
 
   claude-assess:
     needs: scan-candidates
@@ -253,6 +311,27 @@ jobs:
       - name: Stash merge gate helpers
         run: cp .github/scripts/merge-gate.js /tmp/merge-gate.js
 
+      # Read from the trusted default-branch checkout, before the PR branch.
+      - name: Load gate prompt settings
+        id: gate_settings
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const file = require('path').join(process.env.GITHUB_WORKSPACE, '.github/scripts/gate-config.js');
+            let cfg = {};
+            if (fs.existsSync(file)) {
+              try {
+                cfg = require(file);
+              } catch (err) {
+                core.warning(`gate-config.js not loaded: ${err.message}`);
+              }
+            }
+            core.setOutput('product_value', cfg.mergeGateProductValue
+              || 'Confirm the change genuinely strengthens the project (no scope creep). BLOCK changes that duplicate existing capabilities or add knobs/fields with no live consumer.');
+            core.setOutput('layering', cfg.mergeGateLayering
+              || 'Repo routing: BLOCK if the change belongs in a different repository or layer per AGENTS.md.');
+
       - name: Fetch PR branch
         env:
           PR_NUMBER: ${{ matrix.pr_number }}
@@ -282,7 +361,7 @@ jobs:
           model: claude-opus-5-5
           trigger_phrase: '@claude-merge-gate-internal'
           direct_prompt: |
-            You are the MERGE GATE reviewer for PraisonAI PR #${{ matrix.pr_number }}.
+            You are the MERGE GATE reviewer for ${{ github.repository }} PR #${{ matrix.pr_number }}.
             READ-ONLY: do not modify code, commit, push, rebase, or create branches.
 
             CRITICAL OUTPUT RULE:
@@ -296,14 +375,13 @@ jobs:
 
             Review checklist:
             1. Read AGENTS.md and the PR diff on the current branch.
-            2. Read all PR comments and reviews (FINAL architecture reviewer / Lead Engineer must have run).
-            3. Confirm SDK value gate: change strengthens praisonaiagents (no scope creep). The aim is a LIGHTWEIGHT AND POWERFUL package — BLOCK changes that add params/modules/exports duplicating existing Agent capabilities (instructions/backstory/tools/hooks/memory), or add knobs/fields with no live consumer, i.e. scope creep for the sake of it.
-            4. Repo routing: BLOCK if agent-callable tools (→ PraisonAI-Tools), lifecycle plugins (→ PraisonAI-Plugins), or optional sandbox backends (→ PraisonAI-Plugins via `praisonai.sandbox`) were added to praisonaiagents/ instead of the external repo.
-            5. Do not bloat the Agent class with additional params — only if absolutely required; we already support many params.
-            6. If agent.py adds >100 lines or new Agent __init__ params, respond MERGE_GATE_VERDICT: BLOCK (manual review required).
-            7. BLOCK if labels security/breaking-change/needs-manual-review/release, sensitive paths (.github/workflows, auth, pyproject.toml), secrets in diff, PR >800 lines or >30 files, or SDK changes without tests. Label `merge-gate-ci-only` exempts CI-only changes under `.github/workflows/`, `.github/actions/`, or merge-gate scripts.
-            8. Confirm no CHANGES_REQUESTED reviews and CI green on HEAD ${{ matrix.head_sha }}.
-            9. If ready to merge: MERGE_GATE_VERDICT: APPROVE. Otherwise: MERGE_GATE_VERDICT: BLOCK with reasons.
+            2. Read all PR comments and reviews (the FINAL architecture review must have run).
+            3. ${{ steps.gate_settings.outputs.product_value }}
+            4. ${{ steps.gate_settings.outputs.layering }}
+            5. Do not bloat core classes with additional params — only if absolutely required.
+            6. The scan already applied this repository's deterministic gates (manual-only labels, sensitive paths, PR size, secret scan, missing tests, required checks) from its gate-config.js before selecting this PR. Do not re-apply your own path, size or label rules; BLOCK only for problems you find in the code, the reviews or CI.
+            7. Confirm no CHANGES_REQUESTED reviews on HEAD ${{ matrix.head_sha }}. CI: the scan already verified the check runs on this HEAD (mcp__github__get_pull_request_status returns only legacy commit statuses, so it is not CI evidence); BLOCK on CI only for a check you can see has FAILED.
+            8. If ready to merge: MERGE_GATE_VERDICT: APPROVE. Otherwise: MERGE_GATE_VERDICT: BLOCK with reasons.
 
             Do not approve or merge via GitHub UI/API — only post the verdict comment.
           disallowed_tools: |
