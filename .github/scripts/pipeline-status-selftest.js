@@ -73,6 +73,12 @@ assert(
   )
 );
 
+assert(
+  'merge gate BLOCK on HEAD maps to its own blocker label',
+  ps.deriveBlockerLabels({ ready: false, reasons: [mg.BLOCKED_ON_HEAD_REASON] }).includes(mg.BLOCKED_MERGE_GATE_LABEL)
+);
+assert('merge-gate blocker label is managed', ps.ALL_PIPELINE_LABELS.includes(mg.BLOCKED_MERGE_GATE_LABEL));
+
 (async () => {
   for (const status of [422, 403]) {
     let createAttempts = 0;
@@ -96,6 +102,32 @@ assert(
       assert(`ensurePipelineLabels skips ${status}`, false);
     }
   }
+
+  // Label sync must never post a CI-fix @claude (it may run under the App
+  // token, whose comments the Claude Assistant ignores; the pending label then
+  // stranded the PR). Only ci-failure-claude posts those, with GH_TOKEN.
+  {
+    const ciFix = require('./ci-failure-claude.js');
+    const realLoad = mg.loadPrContext;
+    const realEval = mg.evaluatePipelineQuiescent;
+    const realTrigger = ciFix.maybeTriggerCiFixClaude;
+    let triggered = 0;
+    let commented = 0;
+    mg.loadPrContext = async () => ({ pr: { state: 'open', created_at: '2026-10-01T00:00:00Z' }, comments: [], labels: [], headSha: 'a'.repeat(40) });
+    mg.evaluatePipelineQuiescent = async () => ({ ready: false, reasons: ['CI not green on HEAD'], headSha: 'a'.repeat(40) });
+    ciFix.maybeTriggerCiFixClaude = async () => { triggered += 1; return { triggered: true }; };
+    const github = { rest: { issues: {
+      removeLabel: async () => {},
+      addLabels: async () => {},
+      createComment: async () => { commented += 1; },
+    } } };
+    await ps.syncPipelineLabels(github, 'o', 'r', 1, { info: () => {} });
+    assert('label sync does not request a CI fix', triggered === 0 && commented === 0);
+    mg.loadPrContext = realLoad;
+    mg.evaluatePipelineQuiescent = realEval;
+    ciFix.maybeTriggerCiFixClaude = realTrigger;
+  }
+
   process.exit(failed ? 1 : 0);
 })().catch((e) => {
   console.error(e);
