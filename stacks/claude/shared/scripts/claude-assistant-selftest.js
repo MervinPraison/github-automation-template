@@ -198,6 +198,13 @@ async function testWorkflow(file) {
     trustedIdx > fetchIdx && /trusted-gate-config\/gate-config\.js/.test(job[trustedIdx + 1] || ''));
   assert(`${label}: fork reviews get no shell or file tools`,
     /disallowed_tools: \$\{\{ steps\.check_fork\.outputs\.is_fork == 'true' && 'Bash,Edit,Write,[^']*Read[^']*'/.test(actionWith));
+  // The fork token keeps issues: write so Claude can comment; an App-authored
+  // issue labelled `claude` would otherwise launder fork text into a full run.
+  const forkDeny = (actionWith.match(/is_fork == 'true' && '([^']*)'/) || [])[1] || '';
+  for (const tool of ['mcp__github__create_issue', 'mcp__github__update_issue', 'mcp__github__merge_pull_request',
+    'mcp__github__push_files', 'mcp__github__create_or_update_file', 'mcp__github__create_pull_request_review']) {
+    assert(`${label}: fork reviews deny ${tool}`, forkDeny.split(',').includes(tool));
+  }
 
   // --- Repo prompt settings -------------------------------------------------
   const settings = stepScript(job, 'Load repo settings');
