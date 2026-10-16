@@ -24,10 +24,24 @@ const CLAUDE_ACTIVE_MS = 35 * 60 * 1000;
 const STALE_FINAL_RECOVERY_WINDOW_MS = 60 * 60 * 1000;
 const STALE_FINAL_MAX_PER_WINDOW = 2;
 const PUSH_AFTER_FINAL_DEBOUNCE_MS = 15 * 60 * 1000;
+// How long after a push the "pushed soon after FINAL" debounce keeps holding
+// stale-FINAL recovery back (long enough for CI / a batch of fixes). After that
+// the debounce expires, so a missed completion can no longer block a PR forever.
+const PUSH_SETTLE_MS = 30 * 60 * 1000;
 const ALLOWED_MERGE_STATES = new Set(['CLEAN', 'UNSTABLE']);
 const AGENT_PY_MAX_AUTO_LINES = 100;
-const PR_MAX_AUTO_ADDITIONS = 800;
-const PR_MAX_AUTO_FILES = 30;
+const PR_MAX_AUTO_ADDITIONS = config.maxAutoAdditions || 800;
+const PR_MAX_AUTO_FILES = config.maxAutoFiles || 30;
+// Only the gate's own App bot may post a verdict that counts; anyone can
+// comment "MERGE_GATE_VERDICT: APPROVE". Every verdict path (Opus via MCP, the
+// relay, the fallback BLOCK) posts with the App token. Exact logins only.
+const GATE_VERDICT_AUTHORS = new Set(
+  Array.isArray(config.allowedTriageBots) && config.allowedTriageBots.length
+    ? config.allowedTriageBots
+    : ['praisonai-triage-agent[bot]']
+);
+// Automation that posts FINAL replies / rebase notes (App bot + Actions bot).
+const AUTOMATION_LOGINS = new Set([...GATE_VERDICT_AUTHORS, 'github-actions[bot]']);
 const MANUAL_ONLY_LABELS = new Set(['security', 'breaking-change', 'needs-manual-review', 'release']);
 const WORKFLOW_ONLY_LABEL = 'merge-gate-ci-only';
 const CI_ONLY_PATH_PREFIXES = ['.github/workflows/', '.github/actions/', '.github/scripts/merge-gate'];
@@ -65,6 +79,16 @@ const BOT_REVIEWER_PATTERNS = [
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Exact logins only: a substring match trusted any account whose name merely
+ * contains "github-actions" or "praisonai-triage" (both are registrable).
+ */
+function isTrustedAutomationLogin(login) {
+  const lower = (login || '').toLowerCase();
+  if (!lower) return false;
+  return [...AUTOMATION_LOGINS, ...AUTO_ACTORS].some((a) => a.toLowerCase() === lower);
+}
+
 function isFinalClaudeTriggerComment(c) {
   const body = (c.body || '').toLowerCase();
   if (!AUTO_ACTORS.includes(c.user.login)) return false;
@@ -81,18 +105,23 @@ function isClaudeTriggerNoise(c) {
   return false;
 }
 
+// Markers of a completed FINAL review. anthropics/claude-code-action posted a
+// "Claude finished" tracking comment; the vendored action posts the review
+// itself under a heading such as "## Final architecture review: PR #109",
+// "## Final review: PR #307" or "## Architecture Review — Final Verdict".
+const FINAL_REPLY_MARKERS = [
+  /Claude finished/,
+  /^#{1,4}[^\n]*\bfinal\b[^\n]*\breview\b/im,
+  /^#{1,4}[^\n]*\breview\b[^\n]*\bfinal\b/im,
+];
+
 function isClaudeFinalReplyComment(c) {
-  const login = (c.user?.login || '').toLowerCase();
-  const fromAutomation =
-    login.includes('praisonai-triage') ||
-    login.includes('github-actions') ||
-    AUTO_ACTORS.some((a) => a.toLowerCase() === login);
-  if (!fromAutomation) return false;
+  if (!isTrustedAutomationLogin(c.user?.login)) return false;
   const body = c.body || '';
-  if (body.includes('Claude finished')) return true;
-  // Hub assistant posts structured FINAL reviews without the action wrapper.
-  if (/final architecture review/i.test(body)) return true;
-  return false;
+  // The FINAL trigger ("You are the FINAL architecture reviewer") is posted by
+  // an automation login too; an @claude request is never its own completion.
+  if (/^\s*@claude\b/i.test(body)) return false;
+  return FINAL_REPLY_MARKERS.some((re) => re.test(body));
 }
 
 function hasRecentClaudeTrigger(comments, minutes = 35) {
@@ -112,12 +141,7 @@ function isConflictRebaseTriggerComment(c) {
 }
 
 function isConflictRebaseCompletionComment(c) {
-  const login = (c.user?.login || '').toLowerCase();
-  const fromAutomation =
-    login.includes('praisonai-triage') ||
-    login.includes('github-actions') ||
-    AUTO_ACTORS.some((a) => a.toLowerCase() === login);
-  if (!fromAutomation) return false;
+  if (!isTrustedAutomationLogin(c.user?.login)) return false;
   const body = (c.body || '').toLowerCase();
   return (
     body.includes('rebase complete') ||
@@ -235,11 +259,14 @@ function isStaleFinalAfterPush(comments, headPushedAt) {
   );
   const finalTime = new Date(latestFinal.created_at).getTime();
   if (headTime <= finalTime + 60000) return false;
-  const claudeRepliedAfterFinal = comments.some((c) => {
+  // The reply must follow BOTH the latest FINAL trigger and HEAD: a reply that
+  // predates HEAD reviewed older commits and must not hide the new ones.
+  const replyFloor = Math.max(finalTime, headTime - 60000);
+  const claudeRepliedOnHead = comments.some((c) => {
     if (!isClaudeFinalReplyComment(c)) return false;
-    return new Date(c.created_at).getTime() >= finalTime - 60000;
+    return new Date(c.created_at).getTime() >= replyFloor;
   });
-  if (claudeRepliedAfterFinal) return false;
+  if (claudeRepliedOnHead) return false;
   const claudeSinceHead = comments.some((c) => {
     if (!CLAUDE_TRIGGER_LOGINS.includes(c.user.login)) return false;
     if (isClaudeTriggerNoise(c)) return false;
@@ -270,7 +297,7 @@ function countFinalTriggersSince(comments, sinceMs) {
 
 function isClaudeAutomationLogin(login) {
   const lower = (login || '').toLowerCase();
-  return lower.includes('praisonai-triage') || lower === 'github-actions[bot]';
+  return [...AUTOMATION_LOGINS].some((a) => a.toLowerCase() === lower);
 }
 
 function isPushSoonAfterLatestFinal(comments, headPushedAt) {
@@ -291,13 +318,17 @@ function shouldSkipStaleFinalRecovery(comments, headPushedAt, headPusherLogin = 
   if (!isStaleFinalAfterPush(comments, headPushedAt)) {
     return { skip: true, reason: 'not stale' };
   }
-  if (headPusherLogin && isClaudeAutomationLogin(headPusherLogin)) {
+  // The debounces below compare the push to the FINAL trigger, a relation that
+  // never changes; only hold recovery back while the push is still settling.
+  const pushSettling =
+    !!headPushedAt && Date.now() - new Date(headPushedAt).getTime() < PUSH_SETTLE_MS;
+  if (pushSettling && headPusherLogin && isClaudeAutomationLogin(headPusherLogin)) {
     return { skip: true, reason: 'head pushed by Claude automation' };
   }
   if (needsFinalReReviewAfterConflictRebase(comments, headPushedAt)) {
     return { skip: false, reason: '' };
   }
-  if (isPushSoonAfterLatestFinal(comments, headPushedAt)) {
+  if (pushSettling && isPushSoonAfterLatestFinal(comments, headPushedAt)) {
     return {
       skip: true,
       reason: 'head pushed soon after FINAL (wait for CI / batched fixes)',
@@ -794,9 +825,8 @@ async function evaluatePipelineQuiescent(github, owner, repo, prNumber, core, op
   const { status, headRepo, maintainerCanModify } = ctx.mergeState;
   if (!ALLOWED_MERGE_STATES.has(status)) reasons.push(`mergeState=${status}`);
 
-  if (headRepo && headRepo !== ctx.baseRepo) {
-    reasons.push('fork PR');
-  }
+  const isFork = isForkHeadRepo(headRepo, ctx.baseRepo);
+  if (isFork) reasons.push('fork PR');
 
   if (hasRecentConflictComment(ctx.comments, ctx.headPushedAt)) {
     reasons.push('recent merge-conflict @claude');
@@ -850,40 +880,122 @@ async function evaluatePipelineQuiescent(github, owner, repo, prNumber, core, op
 
   if (ctx.pr.mergeable === false) reasons.push('not mergeable');
 
+  // Starvation guard (see BLOCKED_ON_HEAD_REASON). Not applied on the merge
+  // step itself, which only runs right after a fresh verdict.
+  let blockedOnHead = false;
+  if (!forMergeStep && latestMergeGateVerdictComment(ctx.comments, ctx.headPushedAt)) {
+    const runs = await listChecksOnSha(github, owner, repo, ctx.headSha);
+    if (blockedOnUnchangedHead(ctx.comments, ctx.headPushedAt, runs)) {
+      blockedOnHead = true;
+      reasons.push(BLOCKED_ON_HEAD_REASON);
+    }
+  }
+
   const ready = reasons.length === 0;
   return {
     ready,
     reasons,
     headSha: ctx.headSha,
     prNumber,
+    blockedOnHead,
+    // Never ask Claude to work on fork code automatically.
+    blockFixDue: blockedOnHead && !isFork && blockFixRequestDue(ctx.comments, ctx.headSha),
   };
 }
 
-async function listPrNumbersForMergeGateScan(github, owner, repo, core) {
-  let mergeReadyIssues;
-  if (typeof github.paginate === 'function') {
-    mergeReadyIssues = await github.paginate(github.rest.issues.listForRepo, {
-      owner,
-      repo,
-      state: 'open',
-      labels: MERGE_READY_LABEL,
-      per_page: 100,
-    });
-  } else {
-    ({ data: mergeReadyIssues } = await github.rest.issues.listForRepo({
-      owner,
-      repo,
-      state: 'open',
-      labels: MERGE_READY_LABEL,
-      per_page: 100,
-    }));
+/** A deleted fork has no head repo; it counts as a fork. */
+function isForkHeadRepo(headRepo, baseRepo) {
+  return headRepo !== baseRepo;
+}
+
+// ---------------------------------------------------------------------------
+// Starvation guard. Candidates are scanned oldest-first and capped, so PRs the
+// gate keeps BLOCKing on an unchanged HEAD used to take every slot on every
+// scan while newer ready PRs were never looked at. A BLOCK on the current HEAD
+// now holds the PR out until a commit lands, a check completes after the
+// verdict, or BLOCK_RECHECK_AFTER_MS. While held out, Claude is asked (once per
+// HEAD, capped) to fix the findings.
+// ---------------------------------------------------------------------------
+const BLOCK_RECHECK_AFTER_MS = 24 * 60 * 60 * 1000;
+const BLOCK_FIX_MARKER = 'merge-gate-fix-request:';
+const MAX_BLOCK_FIX_REQUESTS = 3;
+const BLOCKED_ON_HEAD_REASON = 'merge gate blocked this HEAD (waiting for a fix commit)';
+const BLOCKED_MERGE_GATE_LABEL = 'pipeline/blocked:merge-gate';
+
+function latestMergeGateVerdictComment(comments, headPushedAt) {
+  const headTime = headPushedAt ? new Date(headPushedAt).getTime() - 60000 : 0;
+  let latest = null;
+  for (const c of comments || []) {
+    if (!GATE_VERDICT_AUTHORS.has(c.user?.login)) continue;
+    if (!isMergeGateVerdictComment(c.body)) continue;
+    if (isAutomatedFallbackVerdict(c.body)) continue;
+    const t = new Date(c.created_at).getTime();
+    if (headTime && t < headTime) continue;
+    if (!latest || t > new Date(latest.created_at).getTime()) latest = c;
   }
-  const mergeReady = mergeReadyIssues
-    .filter((issue) => issue.pull_request)
-    .map((issue) => issue.number)
+  return latest;
+}
+
+/** True when the newest verdict on HEAD is BLOCK and nothing has changed since. */
+function blockedOnUnchangedHead(comments, headPushedAt, checkRuns, nowMs = Date.now()) {
+  const verdict = latestMergeGateVerdictComment(comments, headPushedAt);
+  if (!verdict || parseVerdictText(verdict.body, { firstLine: true }) !== 'BLOCK') return false;
+  const verdictMs = new Date(verdict.created_at).getTime();
+  if (nowMs - verdictMs >= BLOCK_RECHECK_AFTER_MS) return false;
+  const checkCompletedSince = (checkRuns || []).some(
+    (r) => r.completed_at && new Date(r.completed_at).getTime() > verdictMs
+  );
+  return !checkCompletedSince;
+}
+
+function buildBlockFixRequestBody(headSha) {
+  // Must start with @claude and must NOT contain the verdict marker or the
+  // FINAL-review phrases: claude-response ignores comments with the marker, and
+  // the gate would mistake the others for a FINAL trigger.
+  return [
+    '@claude The merge gate blocked this PR on HEAD `' + headSha.slice(0, 12) + '`.',
+    '',
+    'Read the latest merge gate BLOCK verdict comment on this PR and the review threads it cites.',
+    'Fix every blocking finding on this branch, add or update tests for each fix, and push.',
+    'Do not post an approval or a verdict yourself; the review chain re-runs after your push.',
+    'If a finding is wrong, or needs a maintainer rather than a code change, say so in a reply instead of changing code.',
+    '',
+    `<!-- ${BLOCK_FIX_MARKER}${headSha.slice(0, 12)} -->`,
+  ].join('\n');
+}
+
+/** One fix request per HEAD, at most MAX_BLOCK_FIX_REQUESTS per PR (trusted posters only). */
+function blockFixRequestDue(comments, headSha) {
+  const requests = (comments || []).filter(
+    (c) => CLAUDE_TRIGGER_LOGINS.includes(c.user?.login) && (c.body || '').includes(`<!-- ${BLOCK_FIX_MARKER}`)
+  );
+  if (requests.length >= MAX_BLOCK_FIX_REQUESTS) return false;
+  const marker = `<!-- ${BLOCK_FIX_MARKER}${headSha.slice(0, 12)} -->`;
+  return !requests.some((c) => (c.body || '').includes(marker));
+}
+
+async function listOpenIssuesWithLabel(github, owner, repo, label) {
+  const params = { owner, repo, state: 'open', labels: label, per_page: 100 };
+  if (typeof github.paginate === 'function') {
+    return github.paginate(github.rest.issues.listForRepo, params);
+  }
+  return (await github.rest.issues.listForRepo(params)).data;
+}
+
+async function listPrNumbersForMergeGateScan(github, owner, repo, core) {
+  const prsOnly = (issues) => issues.filter((issue) => issue.pull_request).map((issue) => issue.number);
+  const labelledReady = prsOnly(await listOpenIssuesWithLabel(github, owner, repo, MERGE_READY_LABEL));
+  // Label sync swaps merge-ready for the merge-gate blocker on held-out PRs;
+  // keep scanning them (they never take a slot while held) so the fix request
+  // is still posted and they re-enter once a fix lands.
+  const heldOut = prsOnly(await listOpenIssuesWithLabel(github, owner, repo, BLOCKED_MERGE_GATE_LABEL));
+  const mergeReady = [...labelledReady, ...heldOut]
+    .filter((n, i, all) => all.indexOf(n) === i)
     .sort((a, b) => a - b);
 
-  if (mergeReady.length > 0) {
+  // Only a real merge-ready PR may short-circuit the scan; held-out PRs alone
+  // must not hide unlabelled ready PRs from the oldest-open fallback below.
+  if (labelledReady.length > 0) {
     core?.info?.(
       `Merge gate scan: ${mergeReady.length} ${MERGE_READY_LABEL} PR(s) (skipping unlabelled open PRs)`
     );
@@ -924,7 +1036,12 @@ async function selectMergeGateCandidates(github, owner, repo, prNumbers, maxCand
     if (result.ready) {
       readyList.push({ pr_number: num, head_sha: result.headSha });
     } else {
-      skipped.push({ pr: num, reasons: result.reasons });
+      skipped.push({
+        pr: num,
+        reasons: result.reasons,
+        head_sha: result.headSha,
+        block_fix_due: !!result.blockFixDue,
+      });
     }
   }
   readyList.sort((a, b) => a.pr_number - b.pr_number);
@@ -940,13 +1057,72 @@ function isAutomatedFallbackVerdict(body) {
   return (body || '').includes(AUTOMATED_FALLBACK_MARKER);
 }
 
+const MERGE_GATE_SCAN_MARKER = 'Merge gate scan';
+
+const VERDICT_LINE_RE = /^\s*MERGE_GATE_VERDICT:\s*(APPROVE|BLOCK)\b/;
+
+/**
+ * Verdict in `text`: only markers at the start of a line count, and any BLOCK
+ * marker wins over APPROVE. With firstLine, the first non-empty line must be
+ * the marker (how every gate verdict comment is written).
+ */
+function parseVerdictText(text, { firstLine = false } = {}) {
+  const lines = String(text || '').split('\n');
+  if (firstLine) {
+    const first = lines.find((l) => l.trim() !== '');
+    if (!first || !VERDICT_LINE_RE.test(first)) return null;
+  }
+  const found = lines.map((l) => (l.match(VERDICT_LINE_RE) || [])[1]).filter(Boolean);
+  if (found.length === 0) return null;
+  return found.includes('BLOCK') ? 'BLOCK' : 'APPROVE';
+}
+
+/** A verdict comment starts with MERGE_GATE_VERDICT: APPROVE|BLOCK, never the scan notice. */
+function isMergeGateVerdictComment(body) {
+  const text = body || '';
+  if (text.includes(MERGE_GATE_SCAN_MARKER)) return false;
+  return parseVerdictText(text, { firstLine: true }) !== null;
+}
+
+/**
+ * Verdict from Opus's own final answer in the claude-code stream-json output.
+ * Only the final `type: "result"` event counts: earlier events include tool
+ * results (PR comments, diffs) that anyone can fill with verdict text.
+ */
+function verdictFromAssessOutput(jsonl) {
+  const lines = String(jsonl || '').split('\n').filter((l) => l.trim());
+  for (let i = lines.length - 1; i >= 0; i--) {
+    let evt;
+    try {
+      evt = JSON.parse(lines[i]);
+    } catch {
+      continue;
+    }
+    if (evt && evt.type === 'result') {
+      return typeof evt.result === 'string' ? parseVerdictText(evt.result) : null;
+    }
+  }
+  return null;
+}
+
+/** Throttle the scan's eligibility notice now that dispatches target one PR. */
+function hasRecentMergeGateScanComment(comments, withinMinutes = 30) {
+  const cutoff = Date.now() - withinMinutes * 60 * 1000;
+  return (comments || []).some((c) => {
+    if (!(c.body || '').includes(MERGE_GATE_SCAN_MARKER)) return false;
+    return new Date(c.created_at).getTime() > cutoff;
+  });
+}
+
 function findMergeGateVerdict(comments, minCreatedAt = null, headPushedAt = null, options = {}) {
   const { excludeAutomatedFallback = false } = options || {};
   const minTime = minCreatedAt ? new Date(minCreatedAt).getTime() : 0;
   const headTime = headPushedAt ? new Date(headPushedAt).getTime() - 60000 : 0;
   const gateComments = comments
     .filter((c) => {
-      if (!(c.body || '').includes('MERGE_GATE_VERDICT:')) return false;
+      // A verdict counts only from the gate's own automation logins.
+      if (!GATE_VERDICT_AUTHORS.has(c.user?.login)) return false;
+      if (!isMergeGateVerdictComment(c.body)) return false;
       if (excludeAutomatedFallback && isAutomatedFallbackVerdict(c.body)) return false;
       const created = new Date(c.created_at).getTime();
       if (minTime && created < minTime) return false;
@@ -955,13 +1131,28 @@ function findMergeGateVerdict(comments, minCreatedAt = null, headPushedAt = null
     })
     .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
   if (gateComments.length === 0) return null;
-  const body = gateComments[0].body || '';
-  if (body.includes('MERGE_GATE_VERDICT: APPROVE')) return 'APPROVE';
-  if (body.includes('MERGE_GATE_VERDICT: BLOCK')) return 'BLOCK';
-  return null;
+  return parseVerdictText(gateComments[0].body, { firstLine: true });
 }
 
 module.exports = {
+  GATE_VERDICT_AUTHORS,
+  BLOCKED_ON_HEAD_REASON,
+  BLOCKED_MERGE_GATE_LABEL,
+  BLOCK_FIX_MARKER,
+  MERGE_GATE_SCAN_MARKER,
+  PR_MAX_AUTO_ADDITIONS,
+  PR_MAX_AUTO_FILES,
+  isForkHeadRepo,
+  isMergeGateVerdictComment,
+  parseVerdictText,
+  verdictFromAssessOutput,
+  AUTOMATION_LOGINS,
+  isTrustedAutomationLogin,
+  hasRecentMergeGateScanComment,
+  latestMergeGateVerdictComment,
+  blockedOnUnchangedHead,
+  blockFixRequestDue,
+  buildBlockFixRequestBody,
   resolveTriggerLogins,
   CLAUDE_TRIGGER_LOGINS,
   AUTO_ACTORS,

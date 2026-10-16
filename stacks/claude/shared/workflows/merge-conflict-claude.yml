@@ -116,21 +116,27 @@ jobs:
               });
               const labels = issue.labels.map((l) => l.name);
 
+              const isFork = headRepo !== baseRepo; // a deleted fork has no head repo
               if (status !== 'DIRTY' && labels.includes(LABEL)) {
-                await github.rest.issues.removeLabel({
-                  owner,
-                  repo,
-                  issue_number: prNumber,
-                  name: LABEL,
-                });
-                core.info(`Removed ${LABEL} from PR #${prNumber}`);
+                try {
+                  await github.rest.issues.removeLabel({
+                    owner,
+                    repo,
+                    issue_number: prNumber,
+                    name: LABEL,
+                  });
+                  core.info(`Removed ${LABEL} from PR #${prNumber}`);
+                } catch (err) {
+                  // Fork PRs can deny label removal; elsewhere the error must surface.
+                  if (!isFork || ![403, 404].includes(err.status)) throw err;
+                  core.info(`Could not clear ${LABEL} on fork PR #${prNumber} (${err.status})`);
+                }
               }
 
               if (status !== 'DIRTY') return { skipped: true, reason: 'not dirty' };
               if (isDraft) return { skipped: true, reason: 'draft' };
-              if (headRepo && headRepo !== baseRepo && !maintainerCanModify) {
-                return { skipped: true, reason: 'fork without maintainer edits' };
-              }
+              // Never hand fork code to Claude automatically.
+              if (isFork) return { skipped: true, reason: 'fork PR' };
               if (labels.includes(LABEL)) {
                 return { skipped: true, reason: 'conflict resolution pending' };
               }

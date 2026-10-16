@@ -180,7 +180,7 @@ jobs:
                 return;
               }
               const result = await chain.maybeTriggerClaudeFinal(
-                github, owner, repo, pr, finalBody, core, opts
+                github, owner, repo, pr, finalBody, core, { ...opts, staleRecovery: true }
               );
               if (result.posted) core.info(`Posted stale-FINAL recovery @claude on PR #${pr}`);
               return;
@@ -207,7 +207,7 @@ jobs:
             await ps.ensurePipelineLabels(github, context.repo.owner, context.repo.repo, core);
             await ps.syncPipelineLabels(github, context.repo.owner, context.repo.repo, pr, core);
 
-  # Scheduled + manual: post missing or stale FINAL @claude on all open PRs (incl. forks)
+  # Scheduled + manual: post missing or stale FINAL @claude on open internal PRs (forks are skipped)
   post-missing-claude-final:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -262,7 +262,7 @@ jobs:
               const result = await chain.maybeTriggerClaudeFinal(
                 github, owner, repo, pr.number,
                 mergeGate.FINAL_CLAUDE_REVIEW_BODY, core,
-                { skipCopilot: true, optionalWaitMs: 0 }
+                { skipCopilot: true, optionalWaitMs: 0, staleRecovery: hasFinal && isStale }
               );
               if (result.posted) {
                 posted++;

@@ -107,5 +107,55 @@ assert(
   'claude FINAL not re-posted when already triggered',
   !chain.claudeFinalReady([greptile, finalClaude], [], { prCreatedAt: oldPr, requiredWaitMs: 0 }).ready
 );
+assert(
+  'stale-FINAL recovery may re-post over an existing trigger',
+  chain.claudeFinalReady([greptile, finalClaude], [], {
+    prCreatedAt: oldPr, requiredWaitMs: 0, skipCopilot: true, staleRecovery: true,
+  }).ready
+);
 
-process.exit(failed ? 1 : 0);
+// maybeTriggerClaudeFinal actually posts the recovery comment.
+(async () => {
+  const posted = [];
+  const fakeGithub = {
+    rest: {
+      pulls: {
+        get: async () => ({ data: { created_at: oldPr, head: { repo: { full_name: 'o/r' } } } }),
+        listReviews: async () => ({ data: [] }),
+      },
+      issues: {
+        listComments: async () => ({ data: [greptile, finalClaude] }),
+        createComment: async (args) => { posted.push(args); },
+      },
+    },
+  };
+  const stale = await chain.maybeTriggerClaudeFinal(
+    fakeGithub, 'o', 'r', 1, 'BODY', null,
+    { skipCopilot: true, optionalWaitMs: 0, requiredWaitMs: 0, staleRecovery: true }
+  );
+  assert('stale-FINAL recovery posts the replacement comment', stale.posted && posted.length === 1);
+  const dup = await chain.maybeTriggerClaudeFinal(
+    fakeGithub, 'o', 'r', 1, 'BODY', null,
+    { skipCopilot: true, optionalWaitMs: 0, requiredWaitMs: 0 }
+  );
+  assert('without staleRecovery an existing FINAL is not re-posted', !dup.posted && posted.length === 1);
+
+  // Fork code must never be handed to Claude automatically; a maintainer can still @claude.
+  for (const [label, head] of [['fork', { repo: { full_name: 'someone/r' } }], ['deleted fork', { repo: null }]]) {
+    const before = posted.length;
+    const forkGithub = {
+      rest: {
+        ...fakeGithub.rest,
+        pulls: { ...fakeGithub.rest.pulls, get: async () => ({ data: { created_at: oldPr, head } }) },
+        issues: { ...fakeGithub.rest.issues, listComments: async () => ({ data: [greptile] }) },
+      },
+    };
+    const fork = await chain.maybeTriggerClaudeFinal(
+      forkGithub, 'o', 'r', 2, 'BODY', null,
+      { skipCopilot: true, optionalWaitMs: 0, requiredWaitMs: 0, staleRecovery: true }
+    );
+    assert(`no automatic FINAL on a ${label} PR`, !fork.posted && fork.reason === 'fork PR' && posted.length === before);
+  }
+  assert('isForkPr: same repo is internal', !chain.isForkPr({ head: { repo: { full_name: 'o/r' } } }, 'o', 'r'));
+  process.exit(failed ? 1 : 0);
+})();

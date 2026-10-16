@@ -45,6 +45,34 @@ if [[ -d "$ROOT/.github/workflows" ]]; then
   ls "$ROOT/.github/workflows/"*-callable.yml 2>/dev/null | while read -r f; do
     echo "  $(basename "$f")"
   done
+  if command -v actionlint >/dev/null 2>&1; then
+    actionlint "$ROOT/.github/workflows/"*.yml
+    echo "ok: actionlint"
+  else
+    echo "skip: actionlint not installed (brew install actionlint)"
+  fi
+fi
+
+if [[ -z "$TARGET" && -d "$ROOT/.github/scripts" && -d "$ROOT/stacks/$STACK/shared/scripts" ]]; then
+  echo "=== Hub vs copy-mode drift check ==="
+  # install.sh --mode copy ships stacks/<stack>/shared; it must match what hub
+  # callers run from .github (a fix landing in one copy only is a silent gap).
+  DRIFT=0
+  for f in "$ROOT/.github/scripts/"*.js "$ROOT/.github/scripts/"*.sh; do
+    base="$(basename "$f")"
+    [[ "$base" == "gate-config.js" ]] && continue
+    if ! cmp -s "$f" "$ROOT/stacks/$STACK/shared/scripts/$base"; then
+      echo "DRIFT: .github/scripts/$base != stacks/$STACK/shared/scripts/$base"
+      DRIFT=1
+    fi
+  done
+  for a in claude-code-action pick-oauth-token; do
+    if ! cmp -s "$ROOT/.github/actions/$a/action.yml" "$ROOT/stacks/$STACK/shared/actions/$a/action.yml"; then
+      echo "DRIFT: .github/actions/$a/action.yml != stacks/$STACK/shared/actions/$a/action.yml"
+      DRIFT=1
+    fi
+  done
+  [[ "$DRIFT" == 0 ]] && echo "ok: stacks/$STACK/shared matches .github" || exit 1
 fi
 
 echo "=== CI workflow name check ==="
