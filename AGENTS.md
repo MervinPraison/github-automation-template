@@ -216,7 +216,7 @@ Fix any `WARN: no workflow named 'X'` by aligning `gate-config.js` or CI workflo
 | `gitUser` | string | Git commit author for Claude fixes (Claude Assistant prompt) |
 | `gitEmail` | string | Git commit email (Claude Assistant prompt; default `454862+MervinPraison@users.noreply.github.com`) |
 | `triggerLogins` | string[] | Users/bots allowed to trigger review chain |
-| `allowedTriageBots` | string[] | App bot login(s) the automation posts as; only these and `github-actions[bot]` count as merge gate verdict authors (default `praisonai-triage-agent[bot]`) |
+| `allowedTriageBots` | string[] | App bot login(s) the automation posts as; only these count as merge gate verdict authors (default `praisonai-triage-agent[bot]`) |
 | `productPathPrefixes` | string[] | Directories counted as product code |
 | `sensitivePathPatterns` | RegExp[] | Paths requiring manual merge review |
 | `requiredCheckPatterns` | RegExp[] | CI check name patterns for merge gate |

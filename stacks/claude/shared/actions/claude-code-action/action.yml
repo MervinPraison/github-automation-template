@@ -281,6 +281,9 @@ runs:
         if [[ -n "$INPUT_ALLOWED_TOOLS" ]]; then
           TOOLS="$TOOLS,$INPUT_ALLOWED_TOOLS"
         fi
+        # allowed_tools is usually one tool per line; `read` below only sees the
+        # first line, so make the list comma-separated first.
+        TOOLS=$(printf '%s' "$TOOLS" | tr '\n' ',' | sed 's/,,*/,/g; s/^,//; s/,$//')
         
         # Remove any explicitly disallowed tools from the effective allow-list so
         # the read-only contract is enforced deterministically (no reliance on CLI

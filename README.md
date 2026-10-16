@@ -227,9 +227,12 @@ The Claude Assistant runs a write-capable agent, so it only starts for people wh
 | `@claude` by anyone else (incl. read-only collaborators) | No — the job is skipped, or fails at its first step before any token is created |
 | New issue opened by a user with write access | Yes — triage adds the `claude` label |
 | New issue opened by anyone else | No — triage labels it and posts a welcome comment; a maintainer comments `@claude` or adds the `claude` label |
-| Fork PR (including a deleted fork) | Review only: the fork's code is never checked out, Claude gets GitHub read tools plus one comment, and no automatic `@claude` (FINAL, CI fix, merge conflict, merge gate fix) is posted for it |
+| Fork PR (including a deleted fork) | Review only: the fork's code is never checked out, Claude gets GitHub read tools plus one comment under an App token limited to contents/pull-requests read and issues write, and no automatic `@claude` (FINAL, CI fix, merge conflict, merge gate fix) is posted for it |
+| Issue labelled `claude` by the triage App | Only when the issue author has write access (or is the App) |
 
-Merge gate verdicts count only when posted by the gate's own App bot (`allowedTriageBots`, default `praisonai-triage-agent[bot]`) or `github-actions[bot]`; a `MERGE_GATE_VERDICT` comment from anyone else is ignored.
+The merge gate assessor (Opus) runs on PR content with an App token limited to contents/pull-requests read and issues write, and with web, notebook, subagent and GitHub MCP write tools denied. Its verdict counts only when posted by the gate's own App bot (`allowedTriageBots`, default `praisonai-triage-agent[bot]`) as a comment whose first line is `MERGE_GATE_VERDICT: APPROVE|BLOCK` (a comment carrying both is BLOCK); a verdict from anyone else is ignored, and the relay only reads Opus's own final answer, never text quoted from PR comments.
+
+Scripts that run after a PR branch is checked out load `gate-config.js` from a copy of the default branch taken before the fetch, never from the PR.
 
 A PR the merge gate BLOCKed on its current HEAD is held out of the scan (label `pipeline/blocked:merge-gate`) until a new commit, a check finishing after the verdict, or 24 h. Scheduled scans then ask Claude once per HEAD (at most 3 times per PR) to fix the findings; this needs the `GH_TOKEN` secret.
 

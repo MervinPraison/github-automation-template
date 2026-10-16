@@ -32,14 +32,16 @@ const ALLOWED_MERGE_STATES = new Set(['CLEAN', 'UNSTABLE']);
 const AGENT_PY_MAX_AUTO_LINES = 100;
 const PR_MAX_AUTO_ADDITIONS = config.maxAutoAdditions || 800;
 const PR_MAX_AUTO_FILES = config.maxAutoFiles || 30;
-// Only the gate's own automation may post a verdict that counts; anyone can
-// comment "MERGE_GATE_VERDICT: APPROVE". Exact logins, never substrings.
-const GATE_VERDICT_AUTHORS = new Set([
-  ...(Array.isArray(config.allowedTriageBots) && config.allowedTriageBots.length
+// Only the gate's own App bot may post a verdict that counts; anyone can
+// comment "MERGE_GATE_VERDICT: APPROVE". Every verdict path (Opus via MCP, the
+// relay, the fallback BLOCK) posts with the App token. Exact logins only.
+const GATE_VERDICT_AUTHORS = new Set(
+  Array.isArray(config.allowedTriageBots) && config.allowedTriageBots.length
     ? config.allowedTriageBots
-    : ['praisonai-triage-agent[bot]']),
-  'github-actions[bot]',
-]);
+    : ['praisonai-triage-agent[bot]']
+);
+// Automation that posts FINAL replies / rebase notes (App bot + Actions bot).
+const AUTOMATION_LOGINS = new Set([...GATE_VERDICT_AUTHORS, 'github-actions[bot]']);
 const MANUAL_ONLY_LABELS = new Set(['security', 'breaking-change', 'needs-manual-review', 'release']);
 const WORKFLOW_ONLY_LABEL = 'merge-gate-ci-only';
 const CI_ONLY_PATH_PREFIXES = ['.github/workflows/', '.github/actions/', '.github/scripts/merge-gate'];
@@ -77,6 +79,16 @@ const BOT_REVIEWER_PATTERNS = [
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Exact logins only: a substring match trusted any account whose name merely
+ * contains "github-actions" or "praisonai-triage" (both are registrable).
+ */
+function isTrustedAutomationLogin(login) {
+  const lower = (login || '').toLowerCase();
+  if (!lower) return false;
+  return [...AUTOMATION_LOGINS, ...AUTO_ACTORS].some((a) => a.toLowerCase() === lower);
+}
+
 function isFinalClaudeTriggerComment(c) {
   const body = (c.body || '').toLowerCase();
   if (!AUTO_ACTORS.includes(c.user.login)) return false;
@@ -104,12 +116,7 @@ const FINAL_REPLY_MARKERS = [
 ];
 
 function isClaudeFinalReplyComment(c) {
-  const login = (c.user?.login || '').toLowerCase();
-  const fromAutomation =
-    login.includes('praisonai-triage') ||
-    login.includes('github-actions') ||
-    AUTO_ACTORS.some((a) => a.toLowerCase() === login);
-  if (!fromAutomation) return false;
+  if (!isTrustedAutomationLogin(c.user?.login)) return false;
   const body = c.body || '';
   // The FINAL trigger ("You are the FINAL architecture reviewer") is posted by
   // an automation login too; an @claude request is never its own completion.
@@ -134,12 +141,7 @@ function isConflictRebaseTriggerComment(c) {
 }
 
 function isConflictRebaseCompletionComment(c) {
-  const login = (c.user?.login || '').toLowerCase();
-  const fromAutomation =
-    login.includes('praisonai-triage') ||
-    login.includes('github-actions') ||
-    AUTO_ACTORS.some((a) => a.toLowerCase() === login);
-  if (!fromAutomation) return false;
+  if (!isTrustedAutomationLogin(c.user?.login)) return false;
   const body = (c.body || '').toLowerCase();
   return (
     body.includes('rebase complete') ||
@@ -295,7 +297,7 @@ function countFinalTriggersSince(comments, sinceMs) {
 
 function isClaudeAutomationLogin(login) {
   const lower = (login || '').toLowerCase();
-  return lower.includes('praisonai-triage') || lower === 'github-actions[bot]';
+  return [...AUTOMATION_LOGINS].some((a) => a.toLowerCase() === lower);
 }
 
 function isPushSoonAfterLatestFinal(comments, headPushedAt) {
@@ -937,7 +939,7 @@ function latestMergeGateVerdictComment(comments, headPushedAt) {
 /** True when the newest verdict on HEAD is BLOCK and nothing has changed since. */
 function blockedOnUnchangedHead(comments, headPushedAt, checkRuns, nowMs = Date.now()) {
   const verdict = latestMergeGateVerdictComment(comments, headPushedAt);
-  if (!verdict || !/MERGE_GATE_VERDICT:\s*BLOCK\b/.test(verdict.body || '')) return false;
+  if (!verdict || parseVerdictText(verdict.body, { firstLine: true }) !== 'BLOCK') return false;
   const verdictMs = new Date(verdict.created_at).getTime();
   if (nowMs - verdictMs >= BLOCK_RECHECK_AFTER_MS) return false;
   const checkCompletedSince = (checkRuns || []).some(
@@ -1057,11 +1059,50 @@ function isAutomatedFallbackVerdict(body) {
 
 const MERGE_GATE_SCAN_MARKER = 'Merge gate scan';
 
-/** A verdict is a line starting MERGE_GATE_VERDICT: APPROVE|BLOCK, never the scan notice. */
+const VERDICT_LINE_RE = /^\s*MERGE_GATE_VERDICT:\s*(APPROVE|BLOCK)\b/;
+
+/**
+ * Verdict in `text`: only markers at the start of a line count, and any BLOCK
+ * marker wins over APPROVE. With firstLine, the first non-empty line must be
+ * the marker (how every gate verdict comment is written).
+ */
+function parseVerdictText(text, { firstLine = false } = {}) {
+  const lines = String(text || '').split('\n');
+  if (firstLine) {
+    const first = lines.find((l) => l.trim() !== '');
+    if (!first || !VERDICT_LINE_RE.test(first)) return null;
+  }
+  const found = lines.map((l) => (l.match(VERDICT_LINE_RE) || [])[1]).filter(Boolean);
+  if (found.length === 0) return null;
+  return found.includes('BLOCK') ? 'BLOCK' : 'APPROVE';
+}
+
+/** A verdict comment starts with MERGE_GATE_VERDICT: APPROVE|BLOCK, never the scan notice. */
 function isMergeGateVerdictComment(body) {
   const text = body || '';
   if (text.includes(MERGE_GATE_SCAN_MARKER)) return false;
-  return /(?:^|\n)\s*MERGE_GATE_VERDICT:\s*(APPROVE|BLOCK)\b/m.test(text);
+  return parseVerdictText(text, { firstLine: true }) !== null;
+}
+
+/**
+ * Verdict from Opus's own final answer in the claude-code stream-json output.
+ * Only the final `type: "result"` event counts: earlier events include tool
+ * results (PR comments, diffs) that anyone can fill with verdict text.
+ */
+function verdictFromAssessOutput(jsonl) {
+  const lines = String(jsonl || '').split('\n').filter((l) => l.trim());
+  for (let i = lines.length - 1; i >= 0; i--) {
+    let evt;
+    try {
+      evt = JSON.parse(lines[i]);
+    } catch {
+      continue;
+    }
+    if (evt && evt.type === 'result') {
+      return typeof evt.result === 'string' ? parseVerdictText(evt.result) : null;
+    }
+  }
+  return null;
 }
 
 /** Throttle the scan's eligibility notice now that dispatches target one PR. */
@@ -1090,10 +1131,7 @@ function findMergeGateVerdict(comments, minCreatedAt = null, headPushedAt = null
     })
     .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
   if (gateComments.length === 0) return null;
-  const body = gateComments[0].body || '';
-  if (/MERGE_GATE_VERDICT:\s*APPROVE\b/.test(body)) return 'APPROVE';
-  if (/MERGE_GATE_VERDICT:\s*BLOCK\b/.test(body)) return 'BLOCK';
-  return null;
+  return parseVerdictText(gateComments[0].body, { firstLine: true });
 }
 
 module.exports = {
@@ -1106,6 +1144,10 @@ module.exports = {
   PR_MAX_AUTO_FILES,
   isForkHeadRepo,
   isMergeGateVerdictComment,
+  parseVerdictText,
+  verdictFromAssessOutput,
+  AUTOMATION_LOGINS,
+  isTrustedAutomationLogin,
   hasRecentMergeGateScanComment,
   latestMergeGateVerdictComment,
   blockedOnUnchangedHead,

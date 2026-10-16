@@ -204,6 +204,8 @@ jobs:
       actions: read
       id-token: write
     steps:
+      # Read-only for code and PRs: this job runs Claude on PR content, so its
+      # token can comment and label but never push, merge or edit the PR.
       - name: Generate GitHub App Token
         id: app-token
         uses: actions/create-github-app-token@v1
@@ -211,6 +213,11 @@ jobs:
           app-id: ${{ secrets.CLAUDE_APP_ID }}
           private-key: ${{ secrets.CLAUDE_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
+          permission-contents: read
+          permission-pull-requests: read
+          permission-issues: write
+          permission-checks: read
+          permission-actions: read
 
       - uses: actions/checkout@v4
         with:
@@ -242,10 +249,17 @@ jobs:
         with:
           script: |
             const fs = require('fs');
+            const path = require('path');
             let cfg = {};
             if (fs.existsSync(process.env.GATE_CONFIG_PATH || '')) {
+              // Keep a copy outside the workspace: later steps must not load the
+              // PR branch's gate-config.js (PR code) next to the App token.
+              const trusted = path.join(process.env.RUNNER_TEMP, 'trusted-gate-config', 'gate-config.js');
+              fs.mkdirSync(path.dirname(trusted), { recursive: true });
+              fs.copyFileSync(process.env.GATE_CONFIG_PATH, trusted);
+              core.exportVariable('GATE_CONFIG_PATH', trusted);
               try {
-                cfg = require(process.env.GATE_CONFIG_PATH);
+                cfg = require(trusted);
               } catch (err) {
                 core.warning(`gate-config.js not loaded: ${err.message}`);
               }
@@ -313,6 +327,24 @@ jobs:
             Edit
             Write
             Replace
+            NotebookEdit
+            Task
+            WebFetch
+            WebSearch
+            mcp__github__create_or_update_file
+            mcp__github__push_files
+            mcp__github__delete_file
+            mcp__github__create_branch
+            mcp__github__create_repository
+            mcp__github__fork_repository
+            mcp__github__create_issue
+            mcp__github__update_issue
+            mcp__github__create_pull_request
+            mcp__github__update_pull_request
+            mcp__github__update_pull_request_branch
+            mcp__github__merge_pull_request
+            mcp__github__create_pull_request_review
+            mcp__github__add_pull_request_review_comment
           allowed_tools: |
             Glob
             Grep
@@ -349,33 +381,9 @@ jobs:
               return;
             }
 
-            const lines = fs.readFileSync(outPath, 'utf8').split('\n').filter(Boolean);
-            let verdict = null;
-            for (let i = lines.length - 1; i >= 0; i--) {
-              const line = lines[i];
-              if (line.includes('MERGE_GATE_VERDICT: APPROVE')) {
-                verdict = 'APPROVE';
-                break;
-              }
-              if (line.includes('MERGE_GATE_VERDICT: BLOCK')) {
-                verdict = 'BLOCK';
-                break;
-              }
-              try {
-                const evt = JSON.parse(line);
-                const text = JSON.stringify(evt);
-                if (text.includes('MERGE_GATE_VERDICT: APPROVE')) {
-                  verdict = 'APPROVE';
-                  break;
-                }
-                if (text.includes('MERGE_GATE_VERDICT: BLOCK')) {
-                  verdict = 'BLOCK';
-                  break;
-                }
-              } catch {
-                // Not JSON — keep scanning.
-              }
-            }
+            // Only Opus's own final answer counts, never text from tool results
+            // (PR comments and diffs anyone can write).
+            const verdict = mergeGate.verdictFromAssessOutput(fs.readFileSync(outPath, 'utf8'));
             if (!verdict) {
               core.info('Assess output had no MERGE_GATE_VERDICT to relay');
               return;

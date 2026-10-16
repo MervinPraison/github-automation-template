@@ -205,40 +205,44 @@ jobs:
             const trustedAutomation = new Set(['github-actions[bot]', 'praisonai-triage-agent[bot]']);
             const p = context.payload;
             const login = p.comment?.user?.login || p.review?.user?.login || p.sender?.login || context.actor;
+            const permissionOf = async (username) => {
+              try {
+                const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  username,
+                });
+                return data.permission;
+              } catch (err) {
+                core.info(`Permission lookup for ${username} failed: ${err.status || err.message}`);
+                return 'none';
+              }
+            };
             if (trustedAutomation.has(login) && login === context.actor) {
+              // The App labelling an issue `claude` must not launder an issue
+              // written by someone without write access into a Claude run.
+              const author = p.issue?.user?.login;
+              if (context.eventName === 'issues' && author && !trustedAutomation.has(author)) {
+                const authorPermission = await permissionOf(author);
+                if (!['admin', 'write'].includes(authorPermission)) {
+                  core.setFailed(`Claude runs only on issues from users with write access; ${author} has '${authorPermission}'.`);
+                  return;
+                }
+              }
               core.info(`Trusted repository automation: ${login}`);
               return;
             }
-            let permission = 'none';
-            try {
-              const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                username: login,
-              });
-              permission = data.permission;
-            } catch (err) {
-              core.info(`Permission lookup for ${login} failed: ${err.status || err.message}`);
-            }
+            const permission = await permissionOf(login);
             if (!['admin', 'write'].includes(permission)) {
               core.setFailed(`Claude can only be invoked by users with write access; ${login} has '${permission}'.`);
               return;
             }
             core.info(`${login} has ${permission} access`);
 
-      - name: Generate GitHub App Token
-        id: app-token
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.CLAUDE_APP_ID }}
-          private-key: ${{ secrets.CLAUDE_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-
       - name: Check for Fork PR
         id: check_fork
         uses: actions/github-script@v7
         with:
-          github-token: ${{ steps.app-token.outputs.token }}
           script: |
             const isPR = context.eventName === 'pull_request'
               || context.eventName === 'pull_request_review'
@@ -290,12 +294,37 @@ jobs:
             // next to the tokens. A deleted fork (head.repo null) counts as a fork.
             core.setOutput('is_fork', String(pr.data.head.repo?.full_name !== baseRepo));
 
+      # Fork PRs: Claude runs on untrusted PR content with the GitHub MCP tools,
+      # so its App token can comment but never push, merge or edit a PR.
+      - name: Generate GitHub App Token (fork PR, comment-only)
+        id: app-token-fork
+        if: steps.check_fork.outputs.is_fork == 'true'
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.CLAUDE_APP_ID }}
+          private-key: ${{ secrets.CLAUDE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: read
+          permission-pull-requests: read
+          permission-issues: write
+
+      - name: Generate GitHub App Token
+        id: app-token
+        if: steps.check_fork.outputs.is_fork != 'true'
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.CLAUDE_APP_ID }}
+          private-key: ${{ secrets.CLAUDE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          # Default branch, not the event ref (a review event would check out the PR).
+          ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
           fetch-depth: 0
-          token: ${{ steps.app-token.outputs.token }}
+          token: ${{ steps.app-token.outputs.token || steps.app-token-fork.outputs.token }}
 
       # Per-repo prompt settings come from the caller's gate-config.js (the file
       # install.sh renders), read from the trusted checkout above, before any PR
@@ -310,8 +339,13 @@ jobs:
             const file = path.join(process.env.GITHUB_WORKSPACE, '.github/scripts/gate-config.js');
             let cfg = {};
             if (fs.existsSync(file)) {
+              // Later steps load hub scripts with GH_TOKEN after the PR branch (and
+              // Claude) may have changed the workspace: keep a trusted copy.
+              const trusted = path.join(process.env.RUNNER_TEMP, 'trusted-gate-config', 'gate-config.js');
+              fs.mkdirSync(path.dirname(trusted), { recursive: true });
+              fs.copyFileSync(file, trusted);
               try {
-                cfg = require(file);
+                cfg = require(trusted);
               } catch (err) {
                 core.warning(`gate-config.js not loaded: ${err.message}`);
               }
@@ -336,6 +370,11 @@ jobs:
         with:
           hub_ref: ${{ inputs.hub_ref }}
 
+      # hub-setup points GATE_CONFIG_PATH at the workspace (now the PR branch);
+      # use the default-branch copy instead, or none (hub example config).
+      - name: Use trusted gate-config
+        run: echo "GATE_CONFIG_PATH=${RUNNER_TEMP}/trusted-gate-config/gate-config.js" >> "$GITHUB_ENV"
+
       - name: Pick Claude OAuth token
         id: oauth
         uses: ./_hub/.github/actions/pick-oauth-token
@@ -346,7 +385,7 @@ jobs:
 
       - uses: ./_hub/.github/actions/claude-code-action
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token || steps.app-token-fork.outputs.token }}
           ANTHROPIC_DEFAULT_OPUS_MODEL: claude-opus-5-5
           ANTHROPIC_DEFAULT_SONNET_MODEL: claude-sonnet-5-5
         with:
@@ -354,7 +393,7 @@ jobs:
           # the prompt. No file access either, so nothing in the runner (e.g. /proc env) is readable.
           disallowed_tools: ${{ steps.check_fork.outputs.is_fork == 'true' && 'Bash,Edit,Write,Replace,NotebookEdit,Read,View,Glob,Grep,LS,GlobTool,GrepTool,BatchTool,Task,WebFetch,WebSearch,mcp__github__update_issue' || '' }}
           claude_code_oauth_token: ${{ steps.oauth.outputs.token }}
-          github_token: ${{ steps.app-token.outputs.token }}
+          github_token: ${{ steps.app-token.outputs.token || steps.app-token-fork.outputs.token }}
           model: claude-opus-5-5
           trigger_phrase: "@claude"
 

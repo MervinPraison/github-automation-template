@@ -148,12 +148,15 @@ async function testWorkflow(file) {
       ['admin may invoke', { review: { user: { login: 'boss' } } }, 'boss', { boss: 'admin' }, false],
       ['labeler without write is refused', { sender: { login: 'triager' } }, 'triager', { triager: 'read' }, true],
       ['github-actions[bot] automation is trusted', { comment: { user: { login: 'github-actions[bot]' } } }, 'github-actions[bot]', {}, false],
-      ['triage App label is trusted', { sender: { login: 'praisonai-triage-agent[bot]' } }, 'praisonai-triage-agent[bot]', {}, false],
+      ['triage App label on a writer\'s issue is trusted', { sender: { login: 'praisonai-triage-agent[bot]' }, issue: { user: { login: 'dev' } } }, 'praisonai-triage-agent[bot]', { dev: 'write' }, false],
+      ['triage App label on an App-created issue is trusted', { sender: { login: 'praisonai-triage-agent[bot]' }, issue: { user: { login: 'praisonai-triage-agent[bot]' } } }, 'praisonai-triage-agent[bot]', {}, false],
+      ['triage App label on an external issue is refused', { sender: { login: 'praisonai-triage-agent[bot]' }, issue: { user: { login: 'stranger' } } }, 'praisonai-triage-agent[bot]', {}, true],
       ['bot login on a comment by someone else is not trusted', { comment: { user: { login: 'github-actions[bot]' } } }, 'stranger', {}, true],
     ];
     for (const [name, payload, actor, perms, refuse] of scenarios) {
       const calls = [];
-      const r = await runScript(gate, { github: permissionGithub(perms, calls), context: repoCtx({ payload, actor }) });
+      const eventName = payload.comment ? 'issue_comment' : payload.review ? 'pull_request_review' : 'issues';
+      const r = await runScript(gate, { github: permissionGithub(perms, calls), context: repoCtx({ payload, actor, eventName }) });
       assert(`${label}: ${name}`, refuse ? !!r.failedMsg : !r.failedMsg);
     }
   }
@@ -181,6 +184,18 @@ async function testWorkflow(file) {
   assert(`${label}: fork PR branch is never fetched`,
     fetchIdx >= 0 && /is_fork != 'true'/.test(job[fetchIdx + 1] || ''));
   const actionWith = job.join('\n');
+  const forkToken = job.slice(job.findIndex((l) => l.includes('id: app-token-fork'))).slice(0, 12).join('\n');
+  assert(`${label}: fork PRs get a comment-only App token`,
+    /if: steps\.check_fork\.outputs\.is_fork == 'true'/.test(forkToken)
+    && /permission-contents: read/.test(forkToken) && /permission-pull-requests: read/.test(forkToken));
+  const fullToken = job.slice(job.findIndex((l) => l.trim() === 'id: app-token')).slice(0, 3).join('\n');
+  assert(`${label}: full App token is never minted for fork PRs`, /if: steps\.check_fork\.outputs\.is_fork != 'true'/.test(fullToken));
+  const checkoutIdx = job.findIndex((l) => l.trim() === '- name: Checkout repository');
+  assert(`${label}: checkout uses the default branch`,
+    /ref: \$\{\{ github\.event\.repository\.default_branch \}\}/.test(job.slice(checkoutIdx, checkoutIdx + 8).join('\n')));
+  const trustedIdx = job.findIndex((l) => l.trim() === '- name: Use trusted gate-config');
+  assert(`${label}: scripts after the PR fetch use the trusted gate-config copy`,
+    trustedIdx > fetchIdx && /trusted-gate-config\/gate-config\.js/.test(job[trustedIdx + 1] || ''));
   assert(`${label}: fork reviews get no shell or file tools`,
     /disallowed_tools: \$\{\{ steps\.check_fork\.outputs\.is_fork == 'true' && 'Bash,Edit,Write,[^']*Read[^']*'/.test(actionWith));
 
@@ -189,6 +204,7 @@ async function testWorkflow(file) {
   assert(`${label}: repo settings step found`, !!settings);
   if (settings) {
     const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-ws-'));
+    process.env.RUNNER_TEMP = fs.mkdtempSync(path.join(os.tmpdir(), 'runner-temp-'));
     const none = await runScript(settings, { context: repoCtx({}), env: { GITHUB_WORKSPACE: ws } });
     assert(`${label}: settings default without gate-config`,
       none.outputs.git_email === '454862+MervinPraison@users.noreply.github.com'
@@ -200,6 +216,8 @@ async function testWorkflow(file) {
     assert(`${label}: settings read from gate-config`,
       cfg.outputs.git_user === 'bot' && cfg.outputs.git_email === 'bot@example.com'
       && cfg.outputs.test_command === 'npm test' && cfg.outputs.scope === 'SCOPE: widgets only');
+    assert(`${label}: settings step keeps a trusted gate-config copy`,
+      fs.existsSync(path.join(process.env.RUNNER_TEMP, 'trusted-gate-config', 'gate-config.js')));
     fs.rmSync(ws, { recursive: true, force: true });
     const settingsIdx = job.findIndex((l) => l.trim() === '- name: Load repo settings');
     assert(`${label}: settings read before the PR branch is fetched`, settingsIdx >= 0 && settingsIdx < fetchIdx);
@@ -243,6 +261,24 @@ async function testWorkflow(file) {
   }
 }
 
+/** The merge gate assessor runs Claude on PR content: read-only token, no write tools. */
+function testMergeGate(file) {
+  const label = path.relative(path.resolve(__dirname, '../..'), file);
+  const job = jobBlock(fs.readFileSync(file, 'utf8'), 'claude-assess');
+  if (!job) return;
+  const text = job.join('\n');
+  const tokenAt = job.findIndex((l) => l.trim() === 'id: app-token');
+  const token = job.slice(tokenAt, tokenAt + 12).join('\n');
+  assert(`${label}: assessor App token is read-only for code and PRs`,
+    /permission-contents: read/.test(token) && /permission-pull-requests: read/.test(token) && !/: write[\s\S]*permission-contents/.test(token));
+  const denyAt = text.indexOf('disallowed_tools: |');
+  const deny = text.slice(denyAt, text.indexOf(' allowed_tools: |', denyAt));
+  for (const tool of ['Bash', 'Edit', 'Write', 'WebFetch', 'WebSearch', 'NotebookEdit', 'Task', 'mcp__github__push_files', 'mcp__github__merge_pull_request', 'mcp__github__create_or_update_file']) {
+    assert(`${label}: assessor denies ${tool}`, new RegExp(`^\\s+${tool}$`, 'm').test(deny));
+  }
+  assert(`${label}: relay reads only Opus's final result`, !/line\.includes\('MERGE_GATE_VERDICT/.test(text));
+}
+
 /** Every `with:` key passed to the vendored action must be one of its inputs. */
 function testActionInputs(workflowFiles, actionFile) {
   const declared = new Set();
@@ -282,6 +318,9 @@ function testActionInputs(workflowFiles, actionFile) {
     process.exit(0);
   }
   for (const wf of workflows) await testWorkflow(wf);
+  for (const mg of existing(['../workflows/claude-merge-gate-callable.yml', '../../stacks/claude/profiles/sdk/claude-merge-gate.yml.tmpl', '../../profiles/sdk/claude-merge-gate.yml.tmpl', '../workflows/claude-merge-gate.yml'])) {
+    testMergeGate(mg);
+  }
 
   const actions = existing(ACTION_CANDIDATES);
   if (actions.length) {

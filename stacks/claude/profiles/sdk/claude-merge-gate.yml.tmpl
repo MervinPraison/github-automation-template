@@ -281,6 +281,8 @@ jobs:
       actions: read
       id-token: write
     steps:
+      # Read-only for code and PRs: this job runs Claude on PR content, so its
+      # token can comment and label but never push, merge or edit the PR.
       - name: Generate GitHub App Token
         id: app-token
         uses: actions/create-github-app-token@v1
@@ -288,11 +290,17 @@ jobs:
           app-id: ${{ secrets.CLAUDE_APP_ID }}
           private-key: ${{ secrets.CLAUDE_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
+          permission-contents: read
+          permission-pull-requests: read
+          permission-issues: write
+          permission-checks: read
+          permission-actions: read
 
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
+
 
       - name: Mark merge gate active
         id: mark_active
@@ -308,8 +316,13 @@ jobs:
               labels: ['claude-merge-gate-active'],
             });
 
+      # Trusted (default-branch) helpers and config, kept outside the workspace
+      # before the PR branch is checked out.
       - name: Stash merge gate helpers
-        run: cp .github/scripts/merge-gate.js /tmp/merge-gate.js
+        run: |
+          mkdir -p "$RUNNER_TEMP/gate"
+          cp .github/scripts/merge-gate.js .github/scripts/hub-paths.js .github/scripts/gate-config.js "$RUNNER_TEMP/gate/"
+          echo "GATE_CONFIG_PATH=$RUNNER_TEMP/gate/gate-config.js" >> "$GITHUB_ENV"
 
       # Read from the trusted default-branch checkout, before the PR branch.
       - name: Load gate prompt settings
@@ -318,7 +331,7 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const file = require('path').join(process.env.GITHUB_WORKSPACE, '.github/scripts/gate-config.js');
+            const file = process.env.GATE_CONFIG_PATH || '';
             let cfg = {};
             if (fs.existsSync(file)) {
               try {
@@ -389,6 +402,24 @@ jobs:
             Edit
             Write
             Replace
+            NotebookEdit
+            Task
+            WebFetch
+            WebSearch
+            mcp__github__create_or_update_file
+            mcp__github__push_files
+            mcp__github__delete_file
+            mcp__github__create_branch
+            mcp__github__create_repository
+            mcp__github__fork_repository
+            mcp__github__create_issue
+            mcp__github__update_issue
+            mcp__github__create_pull_request
+            mcp__github__update_pull_request
+            mcp__github__update_pull_request_branch
+            mcp__github__merge_pull_request
+            mcp__github__create_pull_request_review
+            mcp__github__add_pull_request_review_comment
           allowed_tools: |
             View
             GlobTool
@@ -403,7 +434,7 @@ jobs:
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
-            const mergeGate = require('/tmp/merge-gate.js');
+            const mergeGate = require(`${process.env.RUNNER_TEMP}/gate/merge-gate.js`);
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const prNumber = ${{ matrix.pr_number }};
@@ -442,7 +473,7 @@ jobs:
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
-            const mergeGate = require('/tmp/merge-gate.js');
+            const mergeGate = require(`${process.env.RUNNER_TEMP}/gate/merge-gate.js`);
             const comments = await mergeGate.listAllComments(
               github, context.repo.owner, context.repo.repo, ${{ matrix.pr_number }}
             );
