@@ -5,6 +5,7 @@
 
 const { resolveGateConfigPath } = require('./hub-paths.js');
 const config = require(resolveGateConfigPath());
+const outsider = require('./outsider-review.js');
 
 function resolveTriggerLogins(gateConfig) {
   if (Array.isArray(gateConfig.triggerLogins) && gateConfig.triggerLogins.length > 0) {
@@ -44,9 +45,19 @@ const GATE_VERDICT_AUTHORS = new Set(
 const AUTOMATION_LOGINS = new Set([...GATE_VERDICT_AUTHORS, 'github-actions[bot]']);
 const MANUAL_ONLY_LABELS = new Set(['security', 'breaking-change', 'needs-manual-review', 'release']);
 const WORKFLOW_ONLY_LABEL = 'merge-gate-ci-only';
-const CI_ONLY_PATH_PREFIXES = ['.github/workflows/', '.github/actions/', '.github/scripts/merge-gate'];
+const CI_ONLY_PATH_PREFIXES = ['.github/workflows/', '.github/actions/', '.github/scripts/', '.github/prompts/'];
 const SDK_PATH_PREFIXES = config.productPathPrefixes;
-const SENSITIVE_PATH_PATTERNS = config.sensitivePathPatterns;
+// Always sensitive, whatever the repo config says: code that runs with the
+// workflows' tokens, the paths workflows reserve for trusted copies, and
+// Claude Code configuration (hooks, MCP servers, instructions).
+const RESERVED_SENSITIVE_PATTERNS = [
+  /^\.github\/(workflows|actions|scripts|prompts)\//,
+  /^(_hub|\.trusted)/,
+  /(^|\/)(\.claude\/|\.mcp\.json$|CLAUDE(\.local)?\.md$)/,
+  /(^|\/)(sitecustomize|usercustomize|noxfile)\.py$/, // run at interpreter start / by test runners
+  /(^|\/)(pytest\.ini|tox\.ini|\.gitmodules|\.gitattributes)$/,
+];
+const SENSITIVE_PATH_PATTERNS = [...(config.sensitivePathPatterns || []), ...RESERVED_SENSITIVE_PATTERNS];
 const REQUIRED_SDK_CHECK_PATTERNS = config.requiredCheckPatterns;
 const SECRET_PATTERNS = [
   /sk-[a-zA-Z0-9]{20,}/,
@@ -872,6 +883,29 @@ async function evaluatePipelineQuiescent(github, owner, repo, prNumber, core, op
   reasons.push(...prSizeReasons(pullFiles));
   reasons.push(...secretScanReasons(pullFiles));
 
+  // Outsider-origin PRs (see outsider-review.js). Provenance costs API calls,
+  // so it is skipped on scans that are already blocked for other reasons.
+  let outsiderOrigin = [];
+  if (forMergeStep || reasons.length === 0) {
+    outsiderOrigin = await outsider.outsiderOriginReasons(github, owner, repo, ctx.pr, ctx.comments);
+    let securityStatus = null;
+    if (forMergeStep && outsiderOrigin.length) {
+      const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef, {
+        owner, repo, ref: ctx.headSha, per_page: 100,
+      });
+      securityStatus = outsider.findSecurityReviewStatus(statuses);
+    }
+    const maintainerReviewed = outsiderOrigin.length > 0
+      && (await outsider.maintainerApprovedHead(github, owner, repo, prNumber, ctx.headSha));
+    reasons.push(...outsider.outsiderGateReasons({
+      origin: outsiderOrigin,
+      files: pullFiles,
+      securityStatus,
+      maintainerReviewed,
+      forMergeStep,
+    }));
+  }
+
   const testsReason = missingTestsReason(pullFiles);
   if (testsReason) reasons.push(testsReason);
 
@@ -900,6 +934,7 @@ async function evaluatePipelineQuiescent(github, owner, repo, prNumber, core, op
     blockedOnHead,
     // Never ask Claude to work on fork code automatically.
     blockFixDue: blockedOnHead && !isFork && blockFixRequestDue(ctx.comments, ctx.headSha),
+    outsiderOrigin,
   };
 }
 

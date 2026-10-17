@@ -288,7 +288,7 @@ Review the diff, commit, push to target repo default branch.
 | Merge gate never runs | `ciWorkflowName` mismatch | Align `gate-config.js` with CI `name:` |
 | `@claude` does not trigger workflow | Missing or wrong `GH_TOKEN` | Set PAT secret; must be maintainer user |
 | `@claude` skipped, or fails at "Authorize requester" | Commenter lacks write access (by design) | A maintainer comments `@claude` or adds the `claude` label |
-| External issue not picked up by Claude | Only issues from users with write access are auto-labelled `claude` (v1.1.15+) | A maintainer comments `@claude` or adds the `claude` label |
+| External issue not picked up by Claude | Only actionable reports (`bug:`, `feat:`, `[...]` titles with a bug/enhancement label) are auto-labelled `claude` | A maintainer comments `@claude` or adds the `claude` label |
 | PR shows `pipeline/blocked:merge-gate` | Gate BLOCKed this HEAD; held out until a commit, a newer check, or 24 h | Push a fix (Claude is asked once per HEAD when `GH_TOKEN` is set) |
 | Review chain stuck 30m | Greptile not installed | Install Greptile app or adjust chain config |
 | `uses: ... callable.yml@v1.1.0` fails | Hub access denied | Enable reusable workflow access on hub repo |

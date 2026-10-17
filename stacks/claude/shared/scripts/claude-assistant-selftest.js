@@ -150,7 +150,9 @@ async function testWorkflow(file) {
       ['github-actions[bot] automation is trusted', { comment: { user: { login: 'github-actions[bot]' } } }, 'github-actions[bot]', {}, false],
       ['triage App label on a writer\'s issue is trusted', { sender: { login: 'praisonai-triage-agent[bot]' }, issue: { user: { login: 'dev' } } }, 'praisonai-triage-agent[bot]', { dev: 'write' }, false],
       ['triage App label on an App-created issue is trusted', { sender: { login: 'praisonai-triage-agent[bot]' }, issue: { user: { login: 'praisonai-triage-agent[bot]' } } }, 'praisonai-triage-agent[bot]', {}, false],
-      ['triage App label on an external issue is refused', { sender: { login: 'praisonai-triage-agent[bot]' }, issue: { user: { login: 'stranger' } } }, 'praisonai-triage-agent[bot]', {}, true],
+      // Deliberate: outsider issues run, with untrusted-input rules and a security review before merge.
+      ['triage App label on an outsider issue is trusted', { sender: { login: 'praisonai-triage-agent[bot]' }, issue: { user: { login: 'stranger' } } }, 'praisonai-triage-agent[bot]', {}, false],
+      ['a person pretending to be the App is not trusted', { sender: { login: 'praisonai-triage-agent[bot]' }, issue: { user: { login: 'stranger' } } }, 'stranger', {}, true],
       ['bot login on a comment by someone else is not trusted', { comment: { user: { login: 'github-actions[bot]' } } }, 'stranger', {}, true],
     ];
     for (const [name, payload, actor, perms, refuse] of scenarios) {
@@ -257,14 +259,17 @@ async function testWorkflow(file) {
     };
     const ext = await run({ number: 1, title: 'bug: crash on start', body: 'traceback', author_association: 'NONE', user: { login: 'stranger' } }, {});
     assert(`${label}: external actionable bug is triaged`, ext.labels.includes('bug'));
-    assert(`${label}: external issue never gets the claude label`, !ext.labels.includes('claude'));
+    // Deliberate: outsider work flows, with untrusted-input rules and a security review before merge.
+    assert(`${label}: external actionable bug gets the claude label`, ext.labels.includes('claude'));
+    const chat = await run({ number: 4, title: 'How do I configure X?', body: 'question', author_association: 'NONE', user: { login: 'stranger' } }, {});
+    assert(`${label}: external non-actionable issue does not get the claude label`, !chat.labels.includes('claude'));
     assert(`${label}: welcome comment links the calling repo`,
       ext.comments.length === 1 && ext.comments[0].includes('https://github.com/acme/widgets/issues')
       && !ext.comments[0].includes('MervinPraison/PraisonAI'));
     const owner = await run({ number: 2, title: 'tidy docs', body: '', author_association: 'OWNER', user: { login: 'boss' } }, { boss: 'admin' });
     assert(`${label}: maintainer issue gets the claude label`, owner.labels.includes('claude') && owner.comments.length === 0);
-    const reader = await run({ number: 3, title: 'fix: x', body: '', author_association: 'COLLABORATOR', user: { login: 'reader' } }, { reader: 'read' });
-    assert(`${label}: read-only collaborator issue does not get the claude label`, !reader.labels.includes('claude'));
+    const reader = await run({ number: 3, title: 'tidy x', body: '', author_association: 'COLLABORATOR', user: { login: 'reader' } }, { reader: 'read' });
+    assert(`${label}: read-only collaborator is treated like an outsider (non-actionable: no label)`, !reader.labels.includes('claude'));
   }
 }
 
@@ -278,11 +283,24 @@ function testMergeGate(file) {
   const token = job.slice(tokenAt, tokenAt + 12).join('\n');
   assert(`${label}: assessor App token is read-only for code and PRs`,
     /permission-contents: read/.test(token) && /permission-pull-requests: read/.test(token) && !/: write[\s\S]*permission-contents/.test(token));
-  const denyAt = text.indexOf('disallowed_tools: |');
-  const deny = text.slice(denyAt, text.indexOf(' allowed_tools: |', denyAt));
-  for (const tool of ['Bash', 'Edit', 'Write', 'WebFetch', 'WebSearch', 'NotebookEdit', 'Task', 'mcp__github__push_files', 'mcp__github__merge_pull_request', 'mcp__github__create_or_update_file']) {
-    assert(`${label}: assessor denies ${tool}`, new RegExp(`^\\s+${tool}$`, 'm').test(deny));
+  // Each Claude step's deny list, inline ("A,B,C") or as a YAML block.
+  const deniedBy = (stepName) => {
+    const at = text.indexOf(`- name: ${stepName}`);
+    if (at < 0) return null;
+    const next = text.indexOf('\n      - ', at + 1);
+    const step = text.slice(at, next < 0 ? undefined : next);
+    const m = /disallowed_tools: (\|\n((?:\s{12,}\S.*\n?)+)|(.+))/.exec(step);
+    if (!m) return new Set();
+    return new Set((m[2] || m[3]).split(/[,\n]/).map((t) => t.trim()).filter(Boolean));
+  };
+  const required = ['Bash', 'Edit', 'Write', 'WebFetch', 'WebSearch', 'NotebookEdit', 'Task', 'Read', 'Glob', 'Grep',
+    'mcp__github__push_files', 'mcp__github__merge_pull_request', 'mcp__github__create_or_update_file'];
+  for (const step of ['Claude merge gate assessment (read-only)', 'Independent security review (outsider-origin PRs)']) {
+    const deny = deniedBy(step);
+    assert(`${label}: step found: ${step}`, !!deny);
+    for (const tool of required) assert(`${label}: ${step} denies ${tool}`, !!deny && deny.has(tool));
   }
+  assert(`${label}: the assess job never checks out PR code`, !/fetch origin "pull\/|git checkout/.test(text));
   assert(`${label}: relay reads only Opus's final result`, !/line\.includes\('MERGE_GATE_VERDICT/.test(text));
 }
 
