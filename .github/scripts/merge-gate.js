@@ -53,7 +53,9 @@ const SDK_PATH_PREFIXES = config.productPathPrefixes;
 const RESERVED_SENSITIVE_PATTERNS = [
   /^\.github\/(workflows|actions|scripts|prompts)\//,
   /^(_hub|\.trusted)/,
-  /(^|\/)(\.claude\/|\.mcp\.json$|CLAUDE\.md$)/,
+  /(^|\/)(\.claude\/|\.mcp\.json$|CLAUDE(\.local)?\.md$)/,
+  /(^|\/)(sitecustomize|usercustomize|noxfile)\.py$/, // run at interpreter start / by test runners
+  /(^|\/)(pytest\.ini|tox\.ini|\.gitmodules|\.gitattributes)$/,
 ];
 const SENSITIVE_PATH_PATTERNS = [...(config.sensitivePathPatterns || []), ...RESERVED_SENSITIVE_PATTERNS];
 const REQUIRED_SDK_CHECK_PATTERNS = config.requiredCheckPatterns;
