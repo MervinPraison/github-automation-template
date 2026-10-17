@@ -87,6 +87,7 @@ jobs:
       issues: write
       actions: read
       id-token: write
+      statuses: write   # the assess job records security/outsider-review
     uses: MervinPraison/github-automation-template/.github/workflows/claude-merge-gate-callable.yml@{{HUB_REF}}
     secrets: inherit
     with:

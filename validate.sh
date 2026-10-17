@@ -82,6 +82,11 @@ if [[ -z "$TARGET" && -d "$ROOT/.github/scripts" && -d "$ROOT/stacks/$STACK/shar
   [[ "$DRIFT" == 0 ]] && echo "ok: stacks/$STACK/shared matches .github" || exit 1
 fi
 
+if [[ -z "$TARGET" && -f "$ROOT/.github/scripts/permission-ceiling-check.py" ]]; then
+  echo "=== Caller permission ceiling ==="
+  python3 "$ROOT/.github/scripts/permission-ceiling-check.py"
+fi
+
 echo "=== CI workflow name check ==="
 if [[ -f "$SCRIPTS/gate-config.js" ]]; then
   CI_NAME=$(node -e "console.log(require('$SCRIPTS/gate-config.js').ciWorkflowName || '')")

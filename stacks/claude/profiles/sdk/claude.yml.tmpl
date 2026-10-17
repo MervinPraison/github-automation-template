@@ -564,11 +564,10 @@ jobs:
     # touched PRs and issues, and those must be flagged. Other steps need success.
     if: always() && needs.claude-response.outputs.trusted_sha != ''
     runs-on: ubuntu-latest
+    # Its steps use the App token or GH_TOKEN, never this job's token. Asking for
+    # more than the caller grants makes the whole workflow fail at startup.
     permissions:
       contents: read
-      issues: write
-      pull-requests: write
-      actions: write
     steps:
       - uses: actions/checkout@v4
         with:
