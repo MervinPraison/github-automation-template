@@ -130,6 +130,10 @@ else
     [[ "$base" == "gate-config.example.js" || "$base" == "gate-config.js" ]] && continue
     run cp "$js" "$GH/scripts/$base"
   done
+  if [[ -d "$SHARED_DIR/prompts" ]]; then
+    run mkdir -p "$GH/prompts"
+    run cp -R "$SHARED_DIR/prompts/." "$GH/prompts/"
+  fi
   if [[ -d "$SHARED_DIR/actions" ]]; then
     mkdir -p "$GH/actions"
     run cp -R "$SHARED_DIR/actions/." "$GH/actions/"

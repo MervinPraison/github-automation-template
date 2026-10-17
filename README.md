@@ -219,22 +219,43 @@ jobs:
 
 ## Who can run Claude
 
-The Claude Assistant runs a write-capable agent, so it only starts for people who could push the change themselves.
+A person can only start Claude if they could push the change themselves. Outsiders' work still flows (their actionable issues and their fork PRs), but under stricter rules and with an independent security review before anything they influenced can merge (see [Outsider work](#outsider-work)).
 
 | Trigger | Starts Claude? |
 |---------|----------------|
 | `@claude` comment or review by a user with **write or admin** access | Yes |
 | `@claude` by anyone else (incl. read-only collaborators) | No — the job is skipped, or fails at its first step before any token is created |
 | New issue opened by a user with write access | Yes — triage adds the `claude` label |
-| New issue opened by anyone else | No — triage labels it and posts a welcome comment; a maintainer comments `@claude` or adds the `claude` label |
-| Fork PR (including a deleted fork) | Review only: the fork's code is never checked out, Claude gets GitHub read tools plus one comment under an App token limited to contents/pull-requests read and issues write, and no automatic `@claude` (FINAL, CI fix, merge conflict, merge gate fix) is posted for it |
-| Issue labelled `claude` by the triage App | Only when the issue author has write access (or is the App) |
+| New issue opened by anyone else | Yes for an actionable bug or enhancement report (titled `bug:`, `feat:`, `[...]` and so on); Claude runs with untrusted-input rules. Otherwise no: triage posts a welcome comment |
+| Fork PR (including a deleted fork) | Automatic review, read-only: the fork's code is never checked out, Claude gets GitHub read tools plus one comment, and adds a security review. No automatic CI-fix or merge-conflict requests (Claude cannot push to a fork). A maintainer merges fork PRs |
+| Issue labelled `claude` by the triage App | Yes, including outsiders' issues (with untrusted-input rules) |
 
 The merge gate assessor (Opus) runs on PR content with an App token limited to contents/pull-requests read and issues write, and with web, notebook, subagent and GitHub MCP write tools denied. Its verdict counts only when posted by the gate's own App bot (`allowedTriageBots`, default `praisonai-triage-agent[bot]`) as a comment whose first line is `MERGE_GATE_VERDICT: APPROVE|BLOCK` (a comment carrying both is BLOCK); a verdict from anyone else is ignored, and the relay only reads Opus's own final answer, never text quoted from PR comments.
 
 Scripts that run after a PR branch is checked out load `gate-config.js` from a copy of the default branch taken before the fetch, never from the PR.
 
 A PR the merge gate BLOCKed on its current HEAD is held out of the scan (label `pipeline/blocked:merge-gate`) until a new commit, a check finishing after the verdict, or 24 h. Scheduled scans then ask Claude once per HEAD (at most 3 times per PR) to fix the findings; this needs the `GH_TOKEN` secret.
+
+## Outsider work
+
+A PR is **outsider-origin** when anything it was built from came from someone without write access: a fork, a non-writer author, a source issue (`claude/issue-N` branch or a closing reference) opened by a non-writer, or a non-writer's comment on that issue or PR. The flag is sticky (label `origin/outsider`, read from the timeline), and every PR the App opens during an outsider run is flagged.
+
+| Layer | What it does |
+|-------|--------------|
+| Prompt rules | Claude treats outsider text as data, keeps the change to a minimal source+test fix, and stops for a maintainer if CI, dependencies, build, network, exec or secrets would change |
+| Independent security review | A second Opus run with GitHub read tools only reviews the diff against a 10-point threat checklist (`.github/prompts/outsider-security-review.md`) plus deterministic risk flags |
+| Same-run verdict | `merge-only` decides from an artifact of its own run (merge verdict, security verdict, reviewed HEAD), never from PR comments; the merge pins the SHA |
+| Hard limits | Changes to `.github/`, manifests, lockfiles, build/install files, `conftest.py`, `.pth`, shell scripts or Claude Code config need a maintainer's approving review on that exact commit |
+| No PR code next to secrets | The merge gate never checks out a PR; the assistant refuses PRs that change `.claude/`, `.mcp.json` or `CLAUDE.md`, runs Claude with `--setting-sources user --strict-mcp-config`, and does its `GH_TOKEN` steps on a fresh runner from the recorded trusted commit |
+
+### Behaviour changes in v1.1.16
+
+- Outsiders' actionable issues start Claude again, and fork PRs get the automatic FINAL review again, now with the layers above.
+- The merge gate no longer checks out PR code; its Claude runs read the PR through the GitHub API with GitHub tools only.
+- `merge-only` merges only on a same-run verdict artifact bound to the reviewed HEAD, and passes `sha` to the merge.
+- Claude Code runs with `--setting-sources user --strict-mcp-config` and an explicit MCP config file, so a checkout's `.claude/settings.json` hooks and `.mcp.json` servers never load.
+- `.github/actions|scripts|prompts`, `_hub`, `.trusted*`, `.claude/`, `.mcp.json` and `CLAUDE.md` are always sensitive paths.
+- New `orphan-pr.js`: opens the missing PR when Claude pushes `claude/issue-N-*` but skips `gh pr create` (title prefix from `orphanPrTitlePrefix`, default `fix`).
 
 ### Behaviour changes in v1.1.15
 

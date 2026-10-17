@@ -66,6 +66,13 @@ if [[ -z "$TARGET" && -d "$ROOT/.github/scripts" && -d "$ROOT/stacks/$STACK/shar
       DRIFT=1
     fi
   done
+  for f in "$ROOT/.github/prompts/"*.md; do
+    [[ -f "$f" ]] || continue
+    if ! cmp -s "$f" "$ROOT/stacks/$STACK/shared/prompts/$(basename "$f")"; then
+      echo "DRIFT: .github/prompts/$(basename "$f") != stacks/$STACK/shared/prompts/$(basename "$f")"
+      DRIFT=1
+    fi
+  done
   for a in claude-code-action pick-oauth-token; do
     if ! cmp -s "$ROOT/.github/actions/$a/action.yml" "$ROOT/stacks/$STACK/shared/actions/$a/action.yml"; then
       echo "DRIFT: .github/actions/$a/action.yml != stacks/$STACK/shared/actions/$a/action.yml"
